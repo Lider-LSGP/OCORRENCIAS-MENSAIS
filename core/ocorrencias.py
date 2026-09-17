@@ -1,8 +1,11 @@
-"""Leitura do Relatório Sintético de Ocorrências do sistema interno.
+"""Leitura do Relatório Sintético de Ocorrências do sistema interno (EasyApp).
 
 O relatório tem ~3 linhas de título e o cabeçalho real na linha 4:
 PARCEIROID | NOME FUNCIONÁRIO | TIPOOCORRENCIA ID | DATA OCORRÊNCIA | ... |
 DATA INÍCIO | DIAS AFASTAMENTO | DATA FIM | ...
+
+A classe aceita caminho de arquivo OU DataFrame (lido com header=0 ou
+header=None) — a linha de cabeçalho é sempre localizada automaticamente.
 """
 from __future__ import annotations
 
@@ -31,6 +34,24 @@ def _to_date(v) -> Optional[date]:
     return None
 
 
+def _localizar_cabecalho(df: pd.DataFrame) -> pd.DataFrame:
+    """Garante que as colunas do DataFrame sejam o cabeçalho real (PARCEIROID...)."""
+    cols_up = [str(c).strip().upper() for c in df.columns]
+    if "PARCEIROID" in cols_up:
+        out = df.copy()
+        out.columns = [str(c).strip() for c in df.columns]
+        return out
+    for i in range(min(20, len(df))):
+        vals = [str(v).strip().upper() for v in df.iloc[i]]
+        if "PARCEIROID" in vals:
+            out = df.copy()
+            out.columns = [str(v).strip() for v in df.iloc[i]]
+            return out.iloc[i + 1:].reset_index(drop=True)
+    raise RuntimeError(
+        "Cabeçalho PARCEIROID não encontrado no relatório de ocorrências. "
+        "Confirme se enviou o Relatório Sintético de Ocorrências do EasyApp.")
+
+
 class OcorrenciasLancadas:
     """Índice do que já está lançado no sistema interno."""
 
@@ -38,17 +59,8 @@ class OcorrenciasLancadas:
         if isinstance(path_ou_df, pd.DataFrame):
             df = path_ou_df
         else:
-            raw = ler_planilha(path_ou_df, dtype=str, header=None)
-            # localiza linha de cabeçalho (contém PARCEIROID)
-            hdr = None
-            for i in range(min(10, len(raw))):
-                if any(str(v).strip().upper() == "PARCEIROID" for v in raw.iloc[i]):
-                    hdr = i
-                    break
-            if hdr is None:
-                raise RuntimeError("Cabeçalho PARCEIROID não encontrado no relatório de ocorrências.")
-            raw.columns = [str(v).strip() for v in raw.iloc[hdr]]
-            df = raw.iloc[hdr + 1:].reset_index(drop=True)
+            df = ler_planilha(path_ou_df, dtype=str, header=None)
+        df = _localizar_cabecalho(df)
 
         self.df = df
         self.df["_parceiro"] = df["PARCEIROID"].apply(lambda v: re.sub(r"\D", "", str(v)))
@@ -56,7 +68,7 @@ class OcorrenciasLancadas:
         self.df["_tipo"] = df["TIPOOCORRENCIA ID"].apply(lambda v: re.sub(r"\D", "", str(v)))
         self.df["_ini"] = df["DATA INÍCIO"].apply(_to_date)
 
-        # chave: (parceiro_id, data_inicio) e (nome, data_inicio) -> tipos lançados
+        # chave: (parceiro_id, data_inicio) e (nome, data_inicio)
         self._por_parceiro: Set[Tuple[str, date]] = set()
         self._por_nome: Set[Tuple[str, date]] = set()
         for _, r in self.df.iterrows():
