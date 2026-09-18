@@ -46,6 +46,11 @@ NOMES_TIPO = {
     "18": "AFASTAMENTO INSS",
     "35": "LICENCA MATERNIDADE",
     "41": "LICENCA PATERNA",
+    "33": "AVISO PREVIO COLABORADOR",
+    "36": "PEDIDO DE DEMISSAO",
+    "38": "AVISO PREVIO EMPRESA",
+    "39": "ENCERRAMENTO DE CONTRATO",
+    "40": "AVISO PREVIO EMPRESA 1 DIA",
 }
 
 # manter compatibilidade com código antigo que importava DEFAULTS_FIXOS
@@ -65,8 +70,13 @@ def periodo_mes(mes: int, ano: int):
 
 def linha_layout(parceiro_id="", nomefuncionario="", nomeempresa="", nomeescala="",
                  nomeposto="", datainicio: date = None, datafim: date = None,
-                 hoje: date = None, fixos: dict = None) -> dict:
-    """Monta uma linha do layout no formato exato (datas aaaa-mm-dd, mes_ano mm/aaaa)."""
+                 hoje: date = None, fixos: dict = None,
+                 preencher_retorno: bool = True) -> dict:
+    """Monta uma linha do layout no formato exato (datas aaaa-mm-dd, mes_ano mm/aaaa).
+
+    preencher_retorno=False deixa `dataprevisaoretorno` vazio (usado em
+    Rescisões/Avisos: não faz sentido prever retorno de quem está saindo).
+    """
     fixos = fixos if fixos is not None else DEFAULTS_FALTAS
     hoje = hoje or date.today()
     row = {c: "" for c in COLUNAS_LAYOUT}
@@ -80,7 +90,8 @@ def linha_layout(parceiro_id="", nomefuncionario="", nomeempresa="", nomeescala=
         row["datainicio"] = datainicio.strftime("%Y-%m-%d")
         row["datafim"] = datafim.strftime("%Y-%m-%d")
         row["qtddiasafastamento"] = str((datafim - datainicio).days + 1)
-        row["dataprevisaoretorno"] = (datafim + timedelta(days=1)).strftime("%Y-%m-%d")
+        row["dataprevisaoretorno"] = (datafim + timedelta(days=1)).strftime("%Y-%m-%d") \
+            if preencher_retorno else ""
         row["dataocorrencia"] = datainicio.strftime("%Y-%m-%d")
     row["mes"] = f"{hoje.month:02d}"
     row["ano"] = str(hoje.year)

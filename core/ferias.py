@@ -28,7 +28,7 @@ from typing import Optional
 import pandas as pd
 
 from .colaboradores import BaseColaboradores, norm_nome
-from .common import clean, to_date
+from .common import clean, to_date, lancamento_residual_proximo
 from .empresas import nome_empresa
 from .layout import linha_layout, COLUNAS_LAYOUT, BASE_DEFAULTS, NOMES_TIPO
 
@@ -115,6 +115,20 @@ def processar_ferias(df: pd.DataFrame, base: BaseColaboradores,
                     nome_lancado = NOMES_TIPO.get(melhor["tipo"], melhor["tipo"])
                     obs.append(f"TIPO LANÇADO DIVERGENTE: sistema tem '{nome_lancado}' "
                                f"(esperado '{nome_oc}')")
+            elif recs:
+                # não achou nada dentro da tolerância normal — mas pode haver um
+                # lançamento de férias "residual" perto da época (a Domínio
+                # cancelou/substituiu o período, mas o lançamento antigo ainda
+                # está ATIVO no sistema interno). Só avisa, não altera o status.
+                residual = lancamento_residual_proximo(recs, ini_esp, fim_esp)
+                if residual is not None:
+                    nome_lancado = NOMES_TIPO.get(residual["tipo"], residual["tipo"])
+                    obs.append(
+                        f"ATENÇÃO: há um lançamento de férias ({nome_lancado}) no "
+                        f"sistema em {residual['ini'].strftime('%d/%m/%Y')} a "
+                        f"{residual['fim'].strftime('%d/%m/%Y')} que pode ter sido "
+                        f"CANCELADO na Domínio mas continua ATIVO no sistema — "
+                        f"confira se precisa cancelar antes de lançar o novo período")
 
         if status == "NÃO CADASTRADO":
             imp_rows.append(linha_layout(

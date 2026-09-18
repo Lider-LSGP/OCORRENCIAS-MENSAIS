@@ -171,7 +171,4 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
 # ---------------------------------------------------------------------------
 from .ferias import processar_ferias  # noqa: E402,F401
 from .afastamentos import processar_afastamentos  # noqa: E402,F401
-
-
-def processar_rescisoes_avisos(df, base, lancadas=None, hoje=None, **kw):
-    raise NotImplementedError("Módulo RESCISÕES/AVISOS: aguardando regras de negócio.")
+from .rescisoes import processar_rescisoes_avisos  # noqa: E402,F401

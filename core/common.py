@@ -71,6 +71,35 @@ def detectar_tipo_relatorio(df: pd.DataFrame) -> Optional[str]:
     return None
 
 
+def lancamento_residual_proximo(recs, ini_esp, fim_esp,
+                                tolerancia_normal: int = 25,
+                                janela_ampla: int = 120):
+    """Procura, entre os períodos já lançados (`recs`, lista de dicts com
+    ini/fim/tipo), um lançamento que esteja PRÓXIMO do período esperado mas
+    FORA da tolerância normal de casamento (não é "o mesmo" lançamento) e
+    dentro de uma janela mais ampla (mesmo assunto, época diferente).
+
+    Isso é o sinal de um período ANTERIOR que provavelmente foi CANCELADO na
+    Domínio (por isso não aparece mais como o período atual) mas continua
+    ATIVO no sistema interno, porque cancelamento na Domínio não cancela
+    automaticamente o lançamento já feito no sistema. Não altera nada — só
+    sinaliza para conferência manual (cancelar o lançamento antigo ou
+    confirmar que ele é válido)."""
+    melhor, melhor_dist = None, None
+    for r in recs:
+        ini, fim = r["ini"], r["fim"]
+        overlap = min(fim, fim_esp) - max(ini, ini_esp)
+        dist = -overlap.days if overlap.days > 0 else \
+            min(abs((ini - ini_esp).days), abs((fim - fim_esp).days))
+        if dist <= tolerancia_normal:
+            continue  # está dentro da tolerância normal — não é "residual"
+        if dist > janela_ampla:
+            continue  # longe demais, provavelmente assunto diferente
+        if melhor_dist is None or dist < melhor_dist:
+            melhor, melhor_dist = r, dist
+    return melhor
+
+
 def clean(s) -> str:
     if s is None or (isinstance(s, float) and s != s):
         return ""
