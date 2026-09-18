@@ -17,12 +17,27 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 from .empresas import EMPRESAS
 
-_FILL = {
-    "VÁLIDO": PatternFill("solid", start_color="FFD5F5E3"),
-    "EM ABERTO": PatternFill("solid", start_color="FFFDEBD0"),
-    "JÁ LANÇADO": PatternFill("solid", start_color="FFE5E7E9"),
-}
+_VERDE = PatternFill("solid", start_color="FFD5F5E3")
+_LARANJA = PatternFill("solid", start_color="FFFDEBD0")
+_CINZA = PatternFill("solid", start_color="FFE5E7E9")
+_VERMELHO = PatternFill("solid", start_color="FFFADBD8")
+_AMARELO = PatternFill("solid", start_color="FFFCF3CF")
 _CAB = PatternFill("solid", start_color="FF0E2C70")
+
+
+def _fill_por_status(status: str):
+    """Escolhe a cor pelo prefixo/conteúdo do STATUS (cobre Faltas, Férias e
+    Afastamentos, cujos textos de status são um pouco diferentes entre si)."""
+    s = str(status).upper()
+    if s.startswith("CADASTRADO") and "ERRO" in s:
+        return _VERMELHO
+    if s == "VÁLIDO" or s == "CADASTRADO":
+        return _VERDE
+    if s in ("EM ABERTO", "NÃO CADASTRADO"):
+        return _AMARELO
+    if s == "JÁ LANÇADO":
+        return _CINZA
+    return None
 
 
 def importacao_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -42,7 +57,7 @@ def resultado_xlsx_bytes(df: pd.DataFrame) -> bytes:
                 c.alignment = Alignment(horizontal="center", vertical="center")
         else:
             status = str(row[0])
-            fill = _FILL.get(status)
+            fill = _fill_por_status(status)
             if fill:
                 for c in ws[r_idx]:
                     c.fill = fill

@@ -141,7 +141,7 @@ if processar:
             if not tipo:
                 erros.append(f"**{nome}**: tipo de relatório Domínio não reconhecido.")
                 continue
-            if tipo != "FALTAS":
+            if tipo in ("AVISOS", "RESCISOES"):
                 erros.append(f"**{nome}** ({tipo}): módulo em desenvolvimento — envie as regras para ativarmos.")
                 continue
             df_imp, df_res = PROCESSADORES[tipo](df, base, lancadas,
@@ -154,11 +154,20 @@ if processar:
                 resultados[tipo] = (df_imp, df_res)
 
             st.subheader(f"🗂️ {nome} → {tipo}")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Linhas do relatório", len(df_res))
-            c2.metric("✅ Válidos", int((df_res["STATUS"] == "VÁLIDO").sum()))
-            c3.metric("⚠️ Em aberto", int((df_res["STATUS"] == "EM ABERTO").sum()))
-            c4.metric("⏭️ Já lançados", int((df_res["STATUS"] == "JÁ LANÇADO").sum()))
+            contagem = df_res["STATUS"].value_counts()
+            n_ir_importacao = len(df_imp)
+            cols = st.columns(min(len(contagem) + 1, 5))
+            cols[0].metric("Linhas do relatório", len(df_res))
+            for i, (status, qtd) in enumerate(contagem.items(), start=1):
+                if i >= len(cols):
+                    break
+                icone = ("✅" if status.startswith("CADASTRADO") and "ERRO" not in status else
+                        "❌" if "ERRO" in status else
+                        "🕒" if status in ("NÃO CADASTRADO", "EM ABERTO") else
+                        "⏭️" if status == "JÁ LANÇADO" else
+                        "✅" if status == "VÁLIDO" else "ℹ️")
+                cols[i].metric(f"{icone} {status[:22]}", int(qtd))
+            st.caption(f"➡️ **{n_ir_importacao}** linha(s) vão para o CSV de importação.")
             st.dataframe(df_res, use_container_width=True, height=320)
         except NotImplementedError as e:
             erros.append(f"**{nome}**: {e}")

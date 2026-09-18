@@ -6,13 +6,19 @@ DATA INÍCIO | DIAS AFASTAMENTO | DATA FIM | ...
 
 A classe aceita caminho de arquivo OU DataFrame (lido com header=0 ou
 header=None) — a linha de cabeçalho é sempre localizada automaticamente.
+
+Fornece consultas O(1) por parceiro_id/nome para:
+  * ja_lancado(data_inicio, ...)              -> conferência simples (Faltas)
+  * periodos_colaborador(parceiro_id, nome)   -> lista de (ini, fim, tipo)
+    usada por Férias/Afastamentos para achar o lançamento mais próximo do
+    período esperado (mesmo que fragmentado em vários registros).
 """
 from __future__ import annotations
 
 import re
 import pandas as pd
 from datetime import datetime, date
-from typing import Optional, Set, Tuple
+from typing import Optional, Set, Tuple, List, Dict
 
 from .colaboradores import norm_nome
 from .leitura import ler_planilha
@@ -62,40 +68,57 @@ class OcorrenciasLancadas:
             df = ler_planilha(path_ou_df, dtype=str, header=None)
         df = _localizar_cabecalho(df)
 
+        df["_parceiro"] = df["PARCEIROID"].apply(lambda v: re.sub(r"\D", "", str(v)))
+        df["_nome"] = df["NOME FUNCIONÁRIO"].apply(norm_nome)
+        df["_tipo"] = df["TIPOOCORRENCIA ID"].apply(lambda v: re.sub(r"\D", "", str(v)))
+        df["_ini"] = df["DATA INÍCIO"].apply(_to_date)
+        df["_fim"] = df["DATA FIM"].apply(_to_date) if "DATA FIM" in df.columns else None
         self.df = df
-        self.df["_parceiro"] = df["PARCEIROID"].apply(lambda v: re.sub(r"\D", "", str(v)))
-        self.df["_nome"] = df["NOME FUNCIONÁRIO"].apply(norm_nome)
-        self.df["_tipo"] = df["TIPOOCORRENCIA ID"].apply(lambda v: re.sub(r"\D", "", str(v)))
-        self.df["_ini"] = df["DATA INÍCIO"].apply(_to_date)
 
-        # chave: (parceiro_id, data_inicio) e (nome, data_inicio)
-        self._por_parceiro: Set[Tuple[str, date]] = set()
-        self._por_nome: Set[Tuple[str, date]] = set()
-        for _, r in self.df.iterrows():
-            if r["_ini"] is None:
+        # índices O(1) por parceiro/nome -> lista de registros {ini, fim, tipo}
+        self._por_parceiro: Dict[str, List[dict]] = {}
+        self._por_nome: Dict[str, List[dict]] = {}
+        self._chave_datas_parceiro: Set[Tuple[str, date]] = set()
+        self._chave_datas_nome: Set[Tuple[str, date]] = set()
+
+        for _, r in df.iterrows():
+            ini = r["_ini"]
+            if ini is None:
                 continue
+            fim = r["_fim"] if r["_fim"] is not None else ini
+            rec = {"ini": ini, "fim": fim, "tipo": r["_tipo"]}
             if r["_parceiro"]:
-                self._por_parceiro.add((r["_parceiro"], r["_ini"]))
+                self._por_parceiro.setdefault(r["_parceiro"], []).append(rec)
+                self._chave_datas_parceiro.add((r["_parceiro"], ini))
             if r["_nome"]:
-                self._por_nome.add((r["_nome"], r["_ini"]))
+                self._por_nome.setdefault(r["_nome"], []).append(rec)
+                self._chave_datas_nome.add((r["_nome"], ini))
 
     def ja_lancado(self, data_inicio: date, parceiro_id: str = "", nome: str = "") -> bool:
         """True se existe QUALQUER ocorrência lançada com a mesma data inicial."""
         pid = re.sub(r"\D", "", str(parceiro_id or ""))
         nn = norm_nome(nome) if nome else ""
-        if pid and (pid, data_inicio) in self._por_parceiro:
+        if pid and (pid, data_inicio) in self._chave_datas_parceiro:
             return True
-        if nn and (nn, data_inicio) in self._por_nome:
+        if nn and (nn, data_inicio) in self._chave_datas_nome:
             return True
         return False
 
     def tipos_do_colaborador(self, data_inicio: date, parceiro_id: str = "", nome: str = "") -> list:
+        recs = self.periodos_colaborador(parceiro_id, nome)
+        return [r["tipo"] for r in recs if r["ini"] == data_inicio]
+
+    def periodos_colaborador(self, parceiro_id: str = "", nome: str = "",
+                             tipos: Optional[tuple] = None) -> List[dict]:
+        """Todos os períodos já lançados para o colaborador (opcionalmente filtrado
+        por tipoocorrencia_id). Usado para achar o lançamento mais próximo do
+        período esperado, mesmo que fragmentado em vários registros."""
         pid = re.sub(r"\D", "", str(parceiro_id or ""))
         nn = norm_nome(nome) if nome else ""
-        tipos = []
-        for _, r in self.df.iterrows():
-            if r["_ini"] != data_inicio:
-                continue
-            if (pid and r["_parceiro"] == pid) or (nn and r["_nome"] == nn):
-                tipos.append(r["_tipo"])
-        return tipos
+        recs = self._por_parceiro.get(pid, []) if pid else []
+        if not recs and nn:
+            recs = self._por_nome.get(nn, [])
+        if tipos:
+            tset = set(tipos)
+            recs = [r for r in recs if r["tipo"] in tset]
+        return recs

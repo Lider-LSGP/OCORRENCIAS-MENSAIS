@@ -19,11 +19,8 @@ COLUNAS_LAYOUT = [
 VAZIAS = {"id", "codigoresponsavelcobertura", "nomeresponsavelcobertura",
           "usoregcreated_at", "system_unit_id", "totaldiasdescontado"}
 
-# defaults que vêm dos registros-modelo do layout (FALTA 30 DIAS)
-DEFAULTS_FIXOS = {
-    "tipoocorrencia_id": "13",
-    "descontabeneficio": "Sim",
-    "nomeocorrencia": "FALTA 30 DIAS",
+# defaults comuns a qualquer tipo de ocorrência (podem ser sobrescritos por módulo)
+BASE_DEFAULTS = {
     "statusocorrencia": "Ativo",
     "postotrabalhoativo": "Sim",
     "nivelcoberturapostooc": "Alto",
@@ -31,6 +28,28 @@ DEFAULTS_FIXOS = {
     "tipooccontrolaferias": "Não",
     "tipoferiasoc": "Não",
 }
+
+# ---- FALTAS MÊS TODO ----
+DEFAULTS_FALTAS = {
+    **BASE_DEFAULTS,
+    "tipoocorrencia_id": "13",
+    "descontabeneficio": "Sim",
+    "nomeocorrencia": "FALTA 30 DIAS",
+}
+
+# nomes de exibição por tipoocorrencia_id (para mensagens de "tipo errado")
+NOMES_TIPO = {
+    "13": "FALTA 30 DIAS",
+    "31": "FERIAS GERAL",
+    "32": "FERIAS VSP",
+    "34": "FERIAS MOTORISTA",
+    "18": "AFASTAMENTO INSS",
+    "35": "LICENCA MATERNIDADE",
+    "41": "LICENCA PATERNA",
+}
+
+# manter compatibilidade com código antigo que importava DEFAULTS_FIXOS
+DEFAULTS_FIXOS = DEFAULTS_FALTAS
 
 
 def mes_seguinte(mes: int, ano: int):
@@ -48,7 +67,7 @@ def linha_layout(parceiro_id="", nomefuncionario="", nomeempresa="", nomeescala=
                  nomeposto="", datainicio: date = None, datafim: date = None,
                  hoje: date = None, fixos: dict = None) -> dict:
     """Monta uma linha do layout no formato exato (datas aaaa-mm-dd, mes_ano mm/aaaa)."""
-    fixos = fixos or DEFAULTS_FIXOS
+    fixos = fixos if fixos is not None else DEFAULTS_FALTAS
     hoje = hoje or date.today()
     row = {c: "" for c in COLUNAS_LAYOUT}
     row.update(fixos)

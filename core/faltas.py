@@ -165,16 +165,13 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
 
 
 # ---------------------------------------------------------------------------
-# Esqueleto dos demais módulos (mesma assinatura de retorno)
+# FÉRIAS e AFASTAMENTOS moram em módulos próprios (core/ferias.py e
+# core/afastamentos.py) — reexportados aqui só por compatibilidade com quem
+# ainda importa `from core.faltas import processar_ferias` etc.
 # ---------------------------------------------------------------------------
-
-def processar_ferias(df, base, lancadas=None, hoje=None):
-    raise NotImplementedError("Módulo FÉRIAS: aguardando regras de negócio (enviar especificação).")
-
-
-def processar_afastamentos(df, base, lancadas=None, hoje=None):
-    raise NotImplementedError("Módulo AFASTAMENTOS: aguardando regras de negócio.")
+from .ferias import processar_ferias  # noqa: E402,F401
+from .afastamentos import processar_afastamentos  # noqa: E402,F401
 
 
-def processar_rescisoes_avisos(df, base, lancadas=None, hoje=None):
+def processar_rescisoes_avisos(df, base, lancadas=None, hoje=None, **kw):
     raise NotImplementedError("Módulo RESCISÕES/AVISOS: aguardando regras de negócio.")
