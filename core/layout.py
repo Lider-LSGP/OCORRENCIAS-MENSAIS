@@ -53,6 +53,19 @@ NOMES_TIPO = {
     "40": "AVISO PREVIO EMPRESA 1 DIA",
 }
 
+# tipos adicionais vistos nos relatórios (cancelamentos, faltas, atestados...)
+NOMES_TIPO.update({
+    "1": "FALTA 1 DIA",
+    "2": "ATESTADO MEDICO",
+    "17": "CANCELAMENTO DE AFASTAMENTO INSS",
+    "19": "CANCELAMENTO DE OCORRENCIA",
+    "29": "CANCELAMENTO DE FERIAS",
+    "30": "RETORNO",
+    "37": "CANCELAMENTO DE AVISO PREVIO",
+    "42": "CANCELAMENTO DE AVISO PREVIO EMPRESA",
+})
+
+
 # manter compatibilidade com código antigo que importava DEFAULTS_FIXOS
 DEFAULTS_FIXOS = DEFAULTS_FALTAS
 

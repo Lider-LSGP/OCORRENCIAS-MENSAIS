@@ -122,3 +122,33 @@ class OcorrenciasLancadas:
             tset = set(tipos)
             recs = [r for r in recs if r["tipo"] in tset]
         return recs
+
+    def tipos_na_data(self, data: date, parceiro_id: str = "", nome: str = "") -> list:
+        """Tipos (tipoocorrencia_id) lançados para o colaborador começando em
+        uma data específica — ex.: faltas dia a dia."""
+        pid = re.sub(r"\D", "", str(parceiro_id or ""))
+        nn = norm_nome(nome) if nome else ""
+        recs = self._por_parceiro.get(pid, []) if pid else []
+        if not recs and nn:
+            recs = self._por_nome.get(nn, [])
+        return [r["tipo"] for r in recs if r["ini"] == data]
+
+    def tem_tipo_na_data(self, data: date, tipos, parceiro_id: str = "",
+                         nome: str = "") -> bool:
+        tset = set(tipos)
+        return any(t in tset for t in self.tipos_na_data(data, parceiro_id, nome))
+
+    def tem_tipo_no_intervalo(self, ini: date, fim: date, tipos,
+                              parceiro_id: str = "", nome: str = "") -> bool:
+        """True se existe algum lançamento desses tipos cobrindo parte do intervalo."""
+        pid = re.sub(r"\D", "", str(parceiro_id or ""))
+        nn = norm_nome(nome) if nome else ""
+        recs = self._por_parceiro.get(pid, []) if pid else []
+        if not recs and nn:
+            recs = self._por_nome.get(nn, [])
+        tset = set(tipos)
+        for r in recs:
+            if r["tipo"] in tset and r["ini"] <= fim and r["fim"] >= ini:
+                return True
+        return False
+

@@ -277,40 +277,58 @@ def processar_rescisoes_avisos(df_aviso: Optional[pd.DataFrame] = None,
         if lancadas is not None and info:
             recs = lancadas.periodos_colaborador(info.get("parceiro_id", ""), nome_sistema,
                                                  tipos=("33", "36", "38", "39", "40"))
-            melhor, melhor_dist = None, None
-            for rec in recs:
-                dist = abs((rec["ini"] - ini_oc).days) + abs((rec["fim"] - fim_oc).days)
-                if melhor_dist is None or dist < melhor_dist:
-                    melhor, melhor_dist = rec, dist
-            if melhor is not None and (melhor["ini"] == ini_oc or melhor["fim"] == fim_oc or
-                                       melhor_dist <= TOLERANCIA_PROXIMIDADE_DIAS):
+            # CORREÇÃO: só considera "já cadastrado" se houver um lançamento do
+            # MESMO tipo com a MESMA data de início. Se houver do mesmo tipo mas
+            # com datas diferentes, marca como CADASTRADO com ERRO. Se houver de
+            # outro tipo com data igual, avisa mas mantém a linha para lançar.
+            mesmo_tipo = [r for r in recs if r["tipo"] == tipo_id]
+            exato = next((r for r in mesmo_tipo
+                          if r["ini"] == ini_oc and r["fim"] == fim_oc), None)
+            aprox = None
+            if not exato and mesmo_tipo:
+                aprox = min(mesmo_tipo,
+                            key=lambda r: abs((r["ini"] - ini_oc).days)
+                            + abs((r["fim"] - fim_oc).days))
+                if abs((aprox["ini"] - ini_oc).days) > TOLERANCIA_PROXIMIDADE_DIAS \
+                        and abs((aprox["fim"] - fim_oc).days) > TOLERANCIA_PROXIMIDADE_DIAS:
+                    aprox = None
+            if exato:
+                status = "CADASTRADO"
+            elif aprox is not None:
                 erros = []
-                if melhor["ini"] != ini_oc:
-                    erros.append(f"ERRO DATA INICIO:{melhor['ini'].strftime('%d/%m/%Y')}")
-                if melhor["fim"] != fim_oc:
-                    erros.append(f"ERRO DATA FINAL:{melhor['fim'].strftime('%d/%m/%Y')}")
-                status = f"CADASTRADO (" + " OU/E ".join(erros) + ")" if erros else "CADASTRADO"
-                if melhor["tipo"] != tipo_id:
-                    nome_lancado = NOMES_TIPO.get(melhor["tipo"], melhor["tipo"])
-                    obs.append(f"TIPO LANÇADO DIVERGENTE: sistema tem '{nome_lancado}' "
-                              f"(esperado '{nome_oc}')")
-            elif recs:
-                # nenhum lançamento dentro da tolerancia normal, mas pode haver
-                # um lançamento de desligamento "residual" (a Domínio
-                # cancelou/substituiu o aviso, mas o lançamento antigo ainda
-                # está ATIVO no sistema interno). Só avisa, não altera o status.
-                residual = lancamento_residual_proximo(recs, ini_oc, fim_oc)
-                if residual is not None:
-                    nome_lancado = NOMES_TIPO.get(residual["tipo"], residual["tipo"])
-                    obs.append(
-                        f"ATENÇÃO: há um lançamento de desligamento ({nome_lancado}) no "
-                        f"sistema em {residual['ini'].strftime('%d/%m/%Y')} a "
-                        f"{residual['fim'].strftime('%d/%m/%Y')} que pode ter sido "
-                        f"CANCELADO/SUBSTITUÍDO na Domínio mas continua ATIVO no sistema — "
-                        f"confira se precisa cancelar antes de lançar o novo aviso")
-                else:
-                    obs.append("Havia lançamento(s) de desligamento no sistema, mas com data(s) "
-                              "muito diferentes — possível aviso cancelado/substituído; confira manualmente")
+                if aprox["ini"] != ini_oc:
+                    erros.append(f"ERRO DATA INICIO:{aprox['ini'].strftime('%d/%m/%Y')}")
+                if aprox["fim"] != fim_oc:
+                    erros.append(f"ERRO DATA FINAL:{aprox['fim'].strftime('%d/%m/%Y')}")
+                status = "CADASTRADO (" + " OU/E ".join(erros) + ")" if erros else "CADASTRADO"
+            else:
+                outro_tipo_msmo_dia = next(
+                    (r for r in recs if r["tipo"] != tipo_id and r["ini"] == ini_oc), None)
+                if outro_tipo_msmo_dia is not None:
+                    nome_lancado = NOMES_TIPO.get(outro_tipo_msmo_dia["tipo"],
+                                                  outro_tipo_msmo_dia["tipo"])
+                    obs.append(f"Já existe ocorrência tipo(s) {outro_tipo_msmo_dia['tipo']} "
+                               f"({nome_lancado}) com início em "
+                               f"{outro_tipo_msmo_dia['ini'].strftime('%d/%m/%Y')} — "
+                               f"conferir antes de lançar o {nome_oc}")
+                elif recs:
+                    # nenhum lançamento do mesmo tipo no dia esperado, mas pode
+                    # haver um lançamento "residual" de desligamento (a Domínio
+                    # cancelou/substituiu o aviso e o antigo continua ATIVO no
+                    # sistema interno). Só avisa, não altera o status.
+                    residual = lancamento_residual_proximo(recs, ini_oc, fim_oc)
+                    if residual is not None:
+                        nome_lancado = NOMES_TIPO.get(residual["tipo"], residual["tipo"])
+                        obs.append(
+                            f"ATENÇÃO: há um lançamento de desligamento ({nome_lancado}) no "
+                            f"sistema em {residual['ini'].strftime('%d/%m/%Y')} a "
+                            f"{residual['fim'].strftime('%d/%m/%Y')} que pode ter sido "
+                            f"CANCELADO/SUBSTITUÍDO na Domínio mas continua ATIVO no sistema — "
+                            f"confira se precisa cancelar antes de lançar o novo aviso")
+                    else:
+                        obs.append("Havia lançamento(s) de desligamento no sistema, mas com "
+                                  "data(s) muito diferentes — possível aviso cancelado/"
+                                  "substituído; confira manualmente")
 
         if status == "NÃO CADASTRADO" and c is not None:
             imp_rows.append(linha_layout(
@@ -327,11 +345,26 @@ def processar_rescisoes_avisos(df_aviso: Optional[pd.DataFrame] = None,
             # bem sinalizado no STATUS.
             status = "NÃO CADASTRADO (COLABORADOR NÃO ENCONTRADO)"
 
+        # PARA DESATIVAR = já tem o aviso/rescisão CONFERIDO (verde) e ainda
+        # está ATIVO no sistema; a operação faz o desligamento à mão. Demissão
+        # futura sai numa aba separada e nunca entra aqui.
+        ativo_no_sistema = (info.get("ativo") or "").strip().lower() in ("sim", "s")
+        precisa_desativar = (
+            str(status).startswith("CADASTRADO") and not futura
+            and ativo_no_sistema and not info.get("demissao"))
+        status_final = status
+        if futura:
+            status_final = status + " | DEMISSÃO FUTURA"
+        elif precisa_desativar:
+            status_final = status + " | PARA DESATIVAR"
+
         linha_res = {
-            "STATUS": status + (" | DEMISSÃO FUTURA" if futura else ""),
+            "STATUS": status_final,
             "NOME (DOMÍNIO)": nome_dom,
             "EMPRESA": empresa,
             "CODI_EMP": codi,
+            "CPF": info.get("cpf", ""),
+            "ADMISSÃO": info.get("admissao", ""),
             "ID SISTEMA (parceiro_id)": info.get("parceiro_id", ""),
             "NOME NO SISTEMA": info.get("nome", ""),
             "TIPO OCORRÊNCIA": nome_oc,
@@ -341,6 +374,7 @@ def processar_rescisoes_avisos(df_aviso: Optional[pd.DataFrame] = None,
             "DATA AVISO": data_aviso.strftime("%d/%m/%Y") if data_aviso else "",
             "DATA DEMISSÃO (FICHA)": data_fim.strftime("%d/%m/%Y"),
             "DATAFIM OCORRÊNCIA": fim_oc.strftime("%d/%m/%Y"),
+            "PARA DESATIVAR": "SIM" if precisa_desativar else "",
             "OBS": " | ".join(obs),
         }
         res_rows.append(linha_res)

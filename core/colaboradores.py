@@ -31,6 +31,11 @@ def norm_nome(s) -> str:
 class BaseColaboradores:
     def __init__(self, df: pd.DataFrame):
         df = df.copy()
+        # o cabeçalho da base às vezes vem colado ("Ativo:Sim" no lugar de "Ativo")
+        for c in list(df.columns):
+            if str(c).startswith("Ativo") and c != "Ativo":
+                df = df.rename(columns={c: "Ativo"})
+                break
         df["_nome"] = df["Nome"].apply(norm_nome)
         df["_mat"] = df["Matricula"].apply(lambda v: re.sub(r"\D", "", clean(v)))
         df["_modal"] = (df["Matrícula/Modal:"].apply(lambda v: re.sub(r"\D", "", clean(v)))
@@ -75,6 +80,8 @@ class BaseColaboradores:
         return {
             "parceiro_id": clean(r.get("Id:")),
             "nome": clean(r.get("Nome")),
+            "cpf": clean(r.get("CPF:")),
+            "admissao": clean(r.get("DT/Admissão:")),
             "matricula": clean(r.get("Matricula")),
             "empresa": clean(r.get("Empresa:")),
             "codi_emp": clean(r.get("_codi")),

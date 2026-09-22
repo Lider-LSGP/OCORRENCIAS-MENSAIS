@@ -22,7 +22,7 @@ import pandas as pd
 
 from .colaboradores import BaseColaboradores, norm_nome, clean
 from .empresas import nome_empresa, EMPRESAS
-from .layout import linha_layout, COLUNAS_LAYOUT, mes_seguinte, periodo_mes
+from .layout import linha_layout, COLUNAS_LAYOUT, mes_seguinte, periodo_mes, NOMES_TIPO
 
 LIMIAR_DIAS_PADRAO = 20
 
@@ -68,6 +68,22 @@ def _mes_ref(v) -> Optional[Tuple[int, int]]:
         except ValueError:
             continue
     return None
+
+
+
+
+def _nomes_tipos(tipos):
+    """Formata lista de ids de tipo como '18 (AFASTAMENTO INSS)' — usado nas OBS."""
+    out = []
+    vistos = set()
+    for t in tipos:
+        t = str(t).strip()
+        if not t or t in vistos:
+            continue
+        vistos.add(t)
+        nome = NOMES_TIPO.get(t, "")
+        out.append(f"{t} ({nome})" if nome else t)
+    return ", ".join(out)
 
 
 def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
@@ -127,7 +143,7 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
         if lancadas is not None:
             if lancadas.ja_lancado(ini, info.get("parceiro_id", ""), nome_sistema):
                 tipos = lancadas.tipos_do_colaborador(ini, info.get("parceiro_id", ""), nome_sistema)
-                obs.append(f"Já existe ocorrência tipo(s) {', '.join(tipos)} com início em {ini.strftime('%d/%m/%Y')}")
+                obs.append(f"Já existe ocorrência tipo(s) {_nomes_tipos(tipos)} com início em {ini.strftime('%d/%m/%Y')}")
                 status = "JÁ LANÇADO"
         bloqueios = [o for o in obs if o.startswith(("NÃO ENCONTRADO", "NOME DIVERGENTE", "NÃO ATIVO"))]
         if status != "JÁ LANÇADO" and bloqueios:
