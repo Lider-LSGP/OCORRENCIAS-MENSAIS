@@ -313,9 +313,10 @@ with tab_proc:
         # arquivos são remontados a cada renderização (barato — só formata os
         # DataFrames já calculados) para que os botões de download continuem
         # funcionando após qualquer rerun, sem depender de estado adicional.
-        arquivos = montar_arquivos(resultados, dividir)
+        pasta_mes = f"MES {date.today().month:02d}"
+        arquivos = montar_arquivos(resultados, dividir, pasta_mes=pasta_mes)
         if df_futuras_total is not None and not df_futuras_total.empty:
-            arquivos[f"{_nome_bonitinho('RESCISOES')}/ALERTA_Demissoes_Futuras.xlsx"] = resultado_xlsx_bytes(
+            arquivos[f"{pasta_mes}/ALERTA - DEMISSOES FUTURAS.xlsx"] = resultado_xlsx_bytes(
                 df_futuras_total, titulo_aba="Demissoes Futuras")
 
         st.divider()

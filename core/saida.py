@@ -88,33 +88,67 @@ def _nome_bonitinho(tipo: str) -> str:
     return _TITULOS_ABA.get(tipo, tipo.capitalize())
 
 
-def montar_arquivos(resultados: dict, dividir_por_empresa: bool) -> dict:
+TIPO_NOME_ARQ = {
+    "FALTAS": "FALTAS",
+    "FERIAS": "FERIAS",
+    "AFASTAMENTOS": "AFASTAMENTOS",
+    "RESCISOES": "RESCISOES",
+    "AVISOS": "RESCISOES",
+}
+
+# apelidos curtos usados nos NOMES de pastas/arquivos do ZIP (como a operação
+# organiza as pastas na prática: ATIVA / L COMERCIAL / L MULTISSERVICOS / VSP)
+APELIDOS_ARQUIVO = {
+    "1": "VSP",
+    "2": "ATIVA",
+    "3": "L MULTISSERVICOS",
+    "4": "L COMERCIAL",
+}
+
+
+def montar_arquivos(resultados: dict, dividir_por_empresa: bool = True,
+                    pasta_mes: str = None) -> dict:
     """resultados: {tipo: (df_imp, df_res)} -> {caminho_no_zip: bytes}.
 
-    Nomes de pastas/arquivos/abas usam os APELIDOS curtos das empresas
-    (VSP, ATIVA, LIDER MULTISSERVIÇOS, LIDER LIMPE) em vez do nome jurídico
-    completo — mais legível para quem abre o ZIP.
+    Estrutura do ZIP (igual à organização manual da operação):
+        MES 09/
+          ATIVA/
+            FALTAS ATIVA - IMPORTACAO.csv
+            FALTAS ATIVA - RESULTADO.xlsx
+            FERIAS ATIVA - IMPORTACAO.csv
+            ...
+          L COMERCIAL/ ...
+          L MULTISSERVICOS/ ...
+          VSP/ ...
+    (o arquivo "ALERTA - DEMISSOES FUTURAS.xlsx" na raiz do MES é adicionado
+    pelo app.py, não por aqui)
     """
+    from datetime import date as _date
+    pasta_raiz = pasta_mes or f"MES {_date.today().month:02d}"
     arquivos = {}
     for tipo, (df_imp, df_res) in resultados.items():
-        nome_tipo = _nome_bonitinho(tipo)
+        nome_tipo = TIPO_NOME_ARQ.get(tipo, tipo)
         if dividir_por_empresa:
             for codi, nome_emp in EMPRESAS.items():
-                apelido = APELIDOS.get(codi, nome_emp)
-                mask_i = df_imp["nomeempresa"].astype(str).str.upper().str.contains(
-                    nome_emp.split()[0] if codi == "1" else _chave_emp(nome_emp), na=False)
-                sub_i = df_imp[mask_i]
-                sub_r = df_res[df_res["CODI_EMP"].astype(str) == codi] if "CODI_EMP" in df_res.columns else df_res
+                apelido = APELIDOS_ARQUIVO.get(codi, APELIDOS.get(codi, codi))
+                if not df_imp.empty and "nomeempresa" in df_imp.columns:
+                    mask_i = df_imp["nomeempresa"].astype(str).str.upper().str.contains(
+                        nome_emp.split()[0] if codi == "1" else _chave_emp(nome_emp), na=False)
+                    sub_i = df_imp[mask_i]
+                else:
+                    sub_i = df_imp
+                sub_r = df_res[df_res["CODI_EMP"].astype(str) == codi] \
+                    if "CODI_EMP" in df_res.columns else df_res
                 if sub_i.empty and sub_r.empty:
                     continue
-                slug_apelido = _slug(apelido)
-                pasta = f"{nome_tipo}/{slug_apelido}"
-                arquivos[f"{pasta}/Importacao_{nome_tipo}_{slug_apelido}.csv"] = importacao_csv_bytes(sub_i)
-                arquivos[f"{pasta}/Resultado_{nome_tipo}_{slug_apelido}.xlsx"] = resultado_xlsx_bytes(
-                    sub_r, titulo_aba=f"{nome_tipo[:20]}-{apelido[:9]}")
+                pasta = f"{pasta_raiz}/{apelido}"
+                arquivos[f"{pasta}/{nome_tipo} {apelido} - IMPORTACAO.csv"] = importacao_csv_bytes(sub_i)
+                arquivos[f"{pasta}/{nome_tipo} {apelido} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
+                    sub_r, titulo_aba=f"{nome_tipo[:20]} {apelido}"[:31])
         else:
-            arquivos[f"{nome_tipo}/Importacao_{nome_tipo}_Todas_Empresas.csv"] = importacao_csv_bytes(df_imp)
-            arquivos[f"{nome_tipo}/Resultado_{nome_tipo}_Todas_Empresas.xlsx"] = resultado_xlsx_bytes(
+            pasta = f"{pasta_raiz}/TODAS EMPRESAS"
+            arquivos[f"{pasta}/{nome_tipo} - IMPORTACAO.csv"] = importacao_csv_bytes(df_imp)
+            arquivos[f"{pasta}/{nome_tipo} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
                 df_res, titulo_aba=nome_tipo)
     return arquivos
 
