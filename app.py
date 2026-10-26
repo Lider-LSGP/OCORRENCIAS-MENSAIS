@@ -96,10 +96,11 @@ with st.sidebar:
     st.divider()
     limiar = st.number_input("Faltas: mínimo de dias p/ mês todo", 1, 31, 20,
                              key=f"limiar_{st.session_state['settings_ctr']}")
-    dividir = st.radio("Saída", ["Juntar empresas (1 arquivo por tipo)",
-                                 "Dividir por tipo + empresa"],
-                       key=f"dividir_{st.session_state['settings_ctr']}"
-                       ) == "Dividir por tipo + empresa"
+    # A organização da operação é sempre mês > empresa > arquivos.
+    # Não oferecer consolidação como padrão ou reaproveitar opção antiga da sessão.
+    dividir = True
+    st.caption("📁 Saída: sempre separada por empresa (ATIVA, L COMERCIAL, "
+               "L MULTISSERVICOS e VSP).")
     processar = st.button("🚀 Processar", type="primary", use_container_width=True)
     col_a, col_b = st.columns(2)
     nova_busca = col_a.button("🔄 Nova busca", use_container_width=True,

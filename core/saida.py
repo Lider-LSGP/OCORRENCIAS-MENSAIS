@@ -172,6 +172,9 @@ def resultado_xlsx_bytes(df: pd.DataFrame, titulo_aba: str = "Resultado",
         desat = _montar_desativar(tipo, df)
         if not desat.empty:
             _escrever_aba(wb.create_sheet("Para Desativar"), desat, colorir_status=True)
+    if "Conferencia" in wb.sheetnames:
+        wb.move_sheet("Conferencia", offset=-wb.sheetnames.index("Conferencia"))
+        wb.active = 0
     bio = io.BytesIO()
     wb.save(bio)
     return bio.getvalue()
@@ -205,67 +208,93 @@ APELIDOS_ARQUIVO = {
 }
 
 
+def _codigo_empresa(valor):
+    """Normaliza códigos numéricos e nomes sem filtros parciais de 'LIDER'."""
+    from .empresas import codi_por_nome
+    v = str(valor).strip() if valor is not None else ""
+    if v.lower() in ("", "nan", "none", "<na>"):
+        return ""
+    if re.fullmatch(r"[1-4](?:\.0+)?", v):
+        return v.split(".")[0]
+    from unicodedata import normalize, combining
+    n = "".join(c for c in normalize("NFD", v.upper()) if not combining(c))
+    n = re.sub(r"\s+", " ", n).strip()
+    aliases = {"L COMERCIAL": "4", "L MULTISSERVICOS": "3",
+               "LIDER MULTISSERVICOS": "3", "LIDER LIMPE": "4",
+               "VSP": "1", "ATIVA": "2"}
+    return aliases.get(n, "") or codi_por_nome(v)
+
+
+def _empresas_resultado(df):
+    codigos = []
+    for pos, (_, row) in enumerate(df.iterrows(), 1):
+        codigo = _codigo_empresa(row.get("CODI_EMP", ""))
+        nome = _codigo_empresa(row.get("EMPRESA", ""))
+        if codigo and nome and codigo != nome:
+            raise ValueError(f"Resultado linha {pos}: código e nome da empresa divergem. "
+                             "Exportação bloqueada para não misturar empresas.")
+        codigo = codigo or nome
+        if not codigo:
+            raise ValueError(f"Resultado linha {pos}: empresa não identificada. "
+                             "Corrija a origem antes de exportar.")
+        codigos.append(codigo)
+    return pd.Series(codigos, index=df.index, dtype=str)
+
+
+def _empresas_importacao(df, df_res, codigos_res):
+    # IDs servem apenas de apoio. Nunca atribuir a mesma linha a duas empresas.
+    por_id = {}
+    if "ID SISTEMA (parceiro_id)" in df_res:
+        for pid, codigo in zip(df_res["ID SISTEMA (parceiro_id)"], codigos_res):
+            pid = str(pid).strip()
+            if pid and pid.lower() not in ("nan", "none"):
+                por_id.setdefault(pid, set()).add(codigo)
+    codigos = []
+    for pos, (_, row) in enumerate(df.iterrows(), 1):
+        codigo = _codigo_empresa(row.get("nomeempresa", ""))
+        apoio = por_id.get(str(row.get("parceiro_id", "")).strip(), set())
+        if codigo and apoio and codigo not in apoio:
+            raise ValueError(f"Importação linha {pos}: empresa diverge do resultado. "
+                             "Exportação bloqueada para conferência.")
+        if not codigo and len(apoio) == 1:
+            codigo = next(iter(apoio))
+        if not codigo:
+            raise ValueError(f"Importação linha {pos}: empresa ausente ou ambígua. "
+                             "Nenhuma linha será duplicada entre pastas.")
+        codigos.append(codigo)
+    return pd.Series(codigos, index=df.index, dtype=str)
+
+
 def montar_arquivos(resultados: dict, dividir_por_empresa: bool = True,
                     pasta_mes: str = None) -> dict:
-    """resultados: {tipo: (df_imp, df_res)} -> {caminho_no_zip: bytes}.
+    """Sempre exporta MES XX/EMPRESA. Argumento legado mantido por compatibilidade.
 
-    Estrutura do ZIP (igual à organização manual da operação):
-        MES 09/
-          ATIVA/
-            FALTAS ATIVA - IMPORTACAO.csv
-            FALTAS ATIVA - RESULTADO.xlsx
-            FERIAS ATIVA - IMPORTACAO.csv
-            ...
-          L COMERCIAL/ ...
-          L MULTISSERVICOS/ ...
-          VSP/ ...
-    (o arquivo "ALERTA - DEMISSOES FUTURAS.xlsx" na raiz do MES é adicionado
-    pelo app.py, não por aqui)
+    Valida código/nome, identifica cada linha uma única vez e verifica que
+    nenhum registro foi perdido ou replicado na divisão por empresa.
     """
     from datetime import date as _date
     pasta_raiz = pasta_mes or f"MES {_date.today().month:02d}"
     arquivos = {}
     for tipo, (df_imp, df_res) in resultados.items():
         nome_tipo = TIPO_NOME_ARQ.get(tipo, tipo)
-        if dividir_por_empresa:
-            for codi, nome_emp in EMPRESAS.items():
-                apelido = APELIDOS_ARQUIVO.get(codi, APELIDOS.get(codi, codi))
-                sub_r = df_res[df_res["CODI_EMP"].astype(str) == codi] \
-                    if "CODI_EMP" in df_res.columns else df_res
-                # CORREÇÃO: a importação é dividida pelos parceiro_ids que estão
-                # no RESULTADO desta empresa — antes filtrava pelo texto de
-                # nomeempresa com a palavra "LIDER" para as duas Líder, o que
-                # jogava as linhas das duas empresas nas duas pastas (CSV da
-                # MULTIS saía com conteúdo da COMERCIAL). Só cai no filtro por
-                # nome se não houver parceiro_id para cruzar.
-                if not df_imp.empty and "parceiro_id" in df_imp.columns and not sub_r.empty \
-                        and "ID SISTEMA (parceiro_id)" in sub_r.columns:
-                    ids_emp = set(sub_r["ID SISTEMA (parceiro_id)"].astype(str)) - {""}
-                    sub_i = df_imp[df_imp["parceiro_id"].astype(str).isin(ids_emp)]
-                elif not df_imp.empty and "nomeempresa" in df_imp.columns:
-                    sub_i = df_imp[df_imp["nomeempresa"].astype(str) == nome_emp]
-                else:
-                    sub_i = df_imp
-                if sub_i.empty and sub_r.empty:
-                    continue
-                pasta = f"{pasta_raiz}/{apelido}"
-                arquivos[f"{pasta}/{nome_tipo} {apelido} - IMPORTACAO.csv"] = importacao_csv_bytes(sub_i)
-                arquivos[f"{pasta}/{nome_tipo} {apelido} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
-                    sub_r, titulo_aba=f"{nome_tipo[:20]} {apelido}"[:31], tipo=tipo)
-        else:
-            pasta = f"{pasta_raiz}/TODAS EMPRESAS"
-            arquivos[f"{pasta}/{nome_tipo} - IMPORTACAO.csv"] = importacao_csv_bytes(df_imp)
-            arquivos[f"{pasta}/{nome_tipo} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
-                df_res, titulo_aba=nome_tipo, tipo=tipo)
+        cod_r = _empresas_resultado(df_res)
+        cod_i = _empresas_importacao(df_imp, df_res, cod_r)
+        total_i = total_r = 0
+        for codi in ("2", "4", "3", "1"):
+            apelido = APELIDOS_ARQUIVO[codi]
+            sub_i = df_imp.loc[cod_i == codi].copy()
+            sub_r = df_res.loc[cod_r == codi].copy()
+            if sub_i.empty and sub_r.empty:
+                continue
+            total_i += len(sub_i)
+            total_r += len(sub_r)
+            pasta = f"{pasta_raiz}/{apelido}"
+            arquivos[f"{pasta}/{nome_tipo} {apelido} - IMPORTACAO.csv"] = importacao_csv_bytes(sub_i)
+            arquivos[f"{pasta}/{nome_tipo} {apelido} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
+                sub_r, titulo_aba=f"{nome_tipo} {apelido}"[:31], tipo=tipo)
+        if total_i != len(df_imp) or total_r != len(df_res):
+            raise ValueError("Falha de integridade na separação por empresa.")
     return arquivos
-
-
-def _chave_emp(nome_emp: str) -> str:
-    # palavra distintiva para casar empresa na coluna nomeempresa
-    for chave in ("ATIVA", "MULTISSERVICOS", "LIMPE", "VSP"):
-        if chave in nome_emp.upper():
-            return "LIDER" if chave in ("MULTISSERVICOS", "LIMPE") else chave
-    return nome_emp.split()[0]
 
 
 def zip_bytes(arquivos: dict) -> bytes:
