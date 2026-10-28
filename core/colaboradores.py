@@ -55,22 +55,49 @@ class BaseColaboradores:
                 self._by_nome.setdefault(r["_nome"], r)
 
     def buscar(self, nome=None, matricula=None, codi_emp=None) -> Optional[pd.Series]:
-        mat = re.sub(r"\D", "", clean(matricula)) if matricula else ""
-        nn = norm_nome(nome) if nome else ""
-        ce = str(codi_emp).strip() if codi_emp else ""
-        if mat:
-            r = self._by_mat.get((ce, mat))
-            if r is not None:
-                return r
-        if nn and ce:
-            r = self._by_nome_emp.get((ce, nn))
-            if r is not None:
-                return r
+        # Nunca reutilizar matrícula ou nome de outra empresa.
+        ce = clean(codi_emp)
+        if re.fullmatch(r"[1-4](?:\.0+)?", ce):
+            ce = ce.split(".")[0]
+        elif ce:
+            ce = codi_por_nome(ce)
+            if not ce:
+                return None
+        mat = clean(matricula)
+        mat = re.sub(r"\.0+$", "", mat)
+        mat = re.sub(r"\D", "", mat)
+        nn = norm_nome(nome)
+        candidatos = self.df
+        if ce:
+            candidatos = candidatos[candidatos["_codi"] == ce]
         if nn:
-            return self._by_nome.get(nn)
+            por_nome = candidatos[candidatos["_nome"] == nn]
+            if len(por_nome) == 1:
+                return por_nome.iloc[0]
+            if len(por_nome) > 1 and mat:
+                por_mat = por_nome[por_nome["_mat"] == mat]
+                if len(por_mat) == 1:
+                    return por_mat.iloc[0]
+            # Matrícula com nome diferente ou múltiplos vínculos não é confirmação.
+            return None
         if mat:
-            return self._by_mat.get(("", mat))
+            por_mat = candidatos[candidatos["_mat"] == mat]
+            if len(por_mat) == 1:
+                return por_mat.iloc[0]
         return None
+
+    def descrever_pendencia(self, nome, codi_emp):
+        ce = re.sub(r"\.0+$", "", clean(codi_emp))
+        encontrados = self.df[self.df["_nome"] == norm_nome(nome)]
+        outros = encontrados[encontrados["_codi"] != ce]
+        if not outros.empty:
+            empresas = " / ".join(sorted(set(outros["_empresa"])))
+            return ("CADASTRO ENCONTRADO SOMENTE/ TAMBÉM EM OUTRA EMPRESA: "
+                    + empresas + ". Vínculo da empresa de origem não confirmado; "
+                    "fora do CSV. Conferir cadastro/transferência manualmente.")
+        if len(encontrados) > 1:
+            return "MÚLTIPLOS VÍNCULOS: identificação ambígua; fora do CSV. Conferir manualmente."
+        return "VÍNCULO NÃO CONFIRMADO NA EMPRESA DE ORIGEM: fora do CSV; conferir cadastro/matrícula."
 
     @staticmethod
     def info(r):

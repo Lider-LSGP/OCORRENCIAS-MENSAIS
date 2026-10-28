@@ -315,7 +315,13 @@ with tab_proc:
         # DataFrames já calculados) para que os botões de download continuem
         # funcionando após qualquer rerun, sem depender de estado adicional.
         pasta_mes = f"MES {date.today().month:02d}"
-        arquivos = montar_arquivos(resultados, dividir, pasta_mes=pasta_mes)
+        try:
+            arquivos = montar_arquivos(resultados, dividir, pasta_mes=pasta_mes)
+        except ValueError as e:
+            st.error("Exportação bloqueada para conferência: " + str(e))
+            st.info("Os resultados acima continuam disponíveis. Confira empresa e vínculo "
+                    "dos colaboradores indicados e envie a base corrigida.")
+            st.stop()
         if df_futuras_total is not None and not df_futuras_total.empty:
             arquivos[f"{pasta_mes}/ALERTA - DEMISSOES FUTURAS.xlsx"] = resultado_xlsx_bytes(
                 df_futuras_total, titulo_aba="Demissoes Futuras")

@@ -131,6 +131,7 @@ def processar_afastamentos(df: pd.DataFrame, base: BaseColaboradores,
         obs = []
         if c is None:
             obs.append("NÃO ENCONTRADO NA BASE DO SISTEMA")
+            obs.append(base.descrever_pendencia(g["nome"], g["codi"]))
         else:
             if info.get("ativo") and info["ativo"] != "Sim":
                 obs.append(f"NÃO ATIVO NO SISTEMA (Ativo: {info['ativo']})")
@@ -176,7 +177,7 @@ def processar_afastamentos(df: pd.DataFrame, base: BaseColaboradores,
                     obs.append(f"TIPO LANÇADO DIVERGENTE: sistema tem '{nomes_lanc}' "
                                f"(esperado '{nome_oc}')")
 
-        if status == "NÃO CADASTRADO":
+        if status == "NÃO CADASTRADO" and c is not None:
             imp_rows.append(linha_layout(
                 parceiro_id=info.get("parceiro_id", ""),
                 nomefuncionario=nome_sistema,
