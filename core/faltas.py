@@ -140,6 +140,7 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
 
         # ---- conferência de já lançados ----
         status = "VÁLIDO"
+        tipos = []
         if lancadas is not None:
             if lancadas.ja_lancado(ini, info.get("parceiro_id", ""), nome_sistema):
                 tipos = lancadas.tipos_do_colaborador(ini, info.get("parceiro_id", ""), nome_sistema)
@@ -172,6 +173,7 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
             "REFERÊNCIA": ref_txt,
             "PERÍODO LANÇADO": periodo_txt,
             "CASADO POR": matched_por,
+            "TIPOS NA DATA": ",".join(str(t) for t in tipos),
             "OBS": " | ".join(obs),
         })
 

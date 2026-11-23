@@ -235,6 +235,10 @@ def processar_rescisoes_avisos(df_aviso: Optional[pd.DataFrame] = None,
 
         motivo_categoria = MOTIVO_EASYAPP.get(motivo, "")
 
+        c = base.buscar(nome=nome_dom, matricula=g["matricula"], codi_emp=codi) if base else None
+        info = BaseColaboradores.info(c) if c is not None else {}
+        ativo_validacao = info.get("ativo", "") if info.get("codi_emp") == codi else ""
+
         # ---- transferência / morte: fora do fluxo automático ----
         if motivo in GRUPO_ESPECIAL_SEM_OCORRENCIA:
             res_rows.append({
@@ -243,6 +247,8 @@ def processar_rescisoes_avisos(df_aviso: Optional[pd.DataFrame] = None,
                 "TIPO OCORRÊNCIA": "—", "MOTIVO/CATEGORIA": motivo_categoria or "Transferência/Morte",
                 "DATA AVISO": data_aviso.strftime("%d/%m/%Y") if data_aviso else "",
                 "DATA DEMISSÃO": data_fim.strftime("%d/%m/%Y"),
+                "ATIVO NO SISTEMA": ativo_validacao,
+                "DEMISSÃO FUTURA?": "SIM" if data_fim > hoje else "",
                 "OBS": f"Motivo '{motivo_categoria}' não gera ocorrência automática de aviso — "
                       f"trate manualmente conforme o caso.",
             })
@@ -255,8 +261,6 @@ def processar_rescisoes_avisos(df_aviso: Optional[pd.DataFrame] = None,
 
         tipo_id, nome_oc, ini_oc, fim_oc = _tipo_e_datas(concedido_por, cumpriu, motivo, data_aviso, data_fim)
 
-        c = base.buscar(nome=nome_dom, matricula=g["matricula"], codi_emp=codi) if base else None
-        info = BaseColaboradores.info(c) if c is not None else {}
         if c is None:
             obs.append("NÃO ENCONTRADO NA BASE — pode ser admissão recente; "
                       "cadastrar o colaborador antes de lançar a demissão")
@@ -375,6 +379,7 @@ def processar_rescisoes_avisos(df_aviso: Optional[pd.DataFrame] = None,
             "DATA DEMISSÃO (FICHA)": data_fim.strftime("%d/%m/%Y"),
             "DATAFIM OCORRÊNCIA": fim_oc.strftime("%d/%m/%Y"),
             "PARA DESATIVAR": "SIM" if precisa_desativar else "",
+            "ATIVO NO SISTEMA": ativo_validacao,
             "OBS": " | ".join(obs),
         }
         res_rows.append(linha_res)

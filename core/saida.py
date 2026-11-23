@@ -84,14 +84,7 @@ def _col_conf(nome):
 
 
 def _montar_conferencia(tipo: str, df_res: pd.DataFrame) -> pd.DataFrame:
-    """Aba 1 — no formato das planilhas de conferência que a operação preenchia
-    manualmente: só as colunas de conferência + uma coluna OBS vazia para
-    anotações. STATUS sai pré-preenchido só quando está verdinho na aba
-    Resultado (CADASTRADO, ou CADASTRADO - DEMITIDO quando a ficha já mostra
-    demissão). Nos demais casos (amarelo/vermelho/lilás...) fica em branco —
-    é a operação quem preenche, como fazia antes."""
-    if df_res is None or df_res.empty:
-        return pd.DataFrame()
+    """Conferência resumida: cadastro da ocorrência, validação e OBS manual."""
     cols = list(df_res.columns)
     def pegar(*nomes):
         for n in nomes:
@@ -115,7 +108,7 @@ def _montar_conferencia(tipo: str, df_res: pd.DataFrame) -> pd.DataFrame:
                 "ADMISSÃO": pegar("ADMISSÃO"),
                 "INÍCIO": pegar("DATA AVISO"),
                 "FIM": pegar("DATAFIM OCORRÊNCIA"),
-                "DEMISSÃO": pegar("DATA DEMISSÃO (FICHA)"),
+                "DEMISSÃO": pegar("DATA DEMISSÃO (FICHA)", "DATA DEMISSÃO"),
                 "CONCESSOR": pegar("CONCEDIDO POR"),
                 "TIPO OCORRÊNCIA": pegar("TIPO OCORRÊNCIA"),
                 "MOTIVO": pegar("MOTIVO/CATEGORIA")}
@@ -133,17 +126,65 @@ def _montar_conferencia(tipo: str, df_res: pd.DataFrame) -> pd.DataFrame:
     if not out:
         return pd.DataFrame()
     conf = pd.DataFrame(out)
-    status = df_res["STATUS"].astype(str)
-    obs = df_res["OBS"].astype(str) if "OBS" in df_res.columns else pd.Series([""] * len(df_res))
-    def _status_conf(i):
-        s = status.iloc[i]
-        if s == "CADASTRADO" or s == "VÁLIDO":
-            dem = re.search(r"DEMISSÃO no sistema: ([0-9/]+)", obs.iloc[i])
-            return "CADASTRADO - DEMITIDO" if dem else s
-        return ""  # cores não-verdes: a operação preenche manualmente
-    conf["STATUS"] = [_status_conf(i) for i in range(len(conf))]
+    cadastros, validacoes = [], []
+    rescisao = tipo in ("RESCISOES", "AVISOS")
+    for _, linha in df_res.fillna("").iterrows():
+        status = str(linha.get("STATUS", "")).strip()
+        principal = status.split(" | ", 1)[0]
+        obs = str(linha.get("OBS", "")).strip()
+        cadastro, validacao = "", ""
+        if principal.startswith("CADASTRADO"):
+            cadastro = re.sub(r"ERRO DATA IN[IÍ]CIO:", "ERRO DATA INICIAL: ", principal)
+            cadastro = re.sub(r"(ERRO DATA FINAL:)\s*", r"\1 ", cadastro)
+            cadastro = re.sub(r"(\d{2}/\d{2}/)\d{2}(\d{2})\b", r"\1\2", cadastro)
+        elif tipo == "FALTAS" and principal == "JÁ LANÇADO":
+            tipos = str(linha.get("TIPOS NA DATA", "")).split(",")
+            if "13" in tipos:
+                cadastro = "CADASTRADO"
+            else:
+                cadastro = "NÃO CADASTRADO"
+                validacao = obs or "OUTRA OCORRÊNCIA NA MESMA DATA — CONFERIR"
+        elif principal.startswith("NÃO CADASTRADO") or principal in ("VÁLIDO", "EM ABERTO"):
+            cadastro = "NÃO CADASTRADO"
+        elif principal == "CONFERÊNCIA MANUAL":
+            cadastro = "CONFERÊNCIA MANUAL"
+
+        if rescisao:
+            ativo = str(linha.get("ATIVO NO SISTEMA", "")).strip().casefold()
+            if "DEMISSÃO FUTURA" in status or linha.get("DEMISSÃO FUTURA?", "") == "SIM":
+                validacao = "DEMISSÃO FUTURA"
+            elif ativo in {"não", "nao", "n"}:
+                validacao = "DESLIGADO"
+            elif ativo in {"sim", "s"}:
+                validacao = "NÃO DESLIGADO"
+            else:
+                validacao = "SITUAÇÃO NÃO CONFIRMADA"
+        else:
+            validacao = validacao or obs
+        cadastros.append(cadastro)
+        validacoes.append(validacao)
+    conf["CADASTRO"] = cadastros
+    conf["VALIDAÇÃO"] = validacoes
     conf["OBS"] = ""
     return conf
+
+
+def _colorir_conferencia(ws, conf):
+    cores_cadastro = {"CADASTRADO": _VERDE, "NÃO CADASTRADO": _VERMELHO,
+                      "CONFERÊNCIA MANUAL": _AMARELO}
+    cores_validacao = {"DESLIGADO": _VERDE, "NÃO DESLIGADO": _VERMELHO,
+                       "DEMISSÃO FUTURA": _LILAS, "SITUAÇÃO NÃO CONFIRMADA": _AMARELO}
+    for coluna, cores in (("CADASTRO", cores_cadastro), ("VALIDAÇÃO", cores_validacao)):
+        indice = conf.columns.get_loc(coluna) + 1
+        for i, valor in enumerate(conf[coluna], start=2):
+            fill = cores.get(valor)
+            if coluna == "CADASTRO" and valor.startswith("CADASTRADO (ERRO DATA"):
+                fill = _VERMELHO
+            cel = ws.cell(row=i, column=indice)
+            if fill:
+                cel.fill = fill
+                cel.font = Font(bold=True)
+            cel.alignment = Alignment(vertical="center", wrap_text=True)
 
 
 def _montar_desativar(tipo: str, df_res: pd.DataFrame) -> pd.DataFrame:
@@ -173,8 +214,10 @@ def resultado_xlsx_bytes(df: pd.DataFrame, titulo_aba: str = "Resultado",
     _escrever_aba(ws, df, colorir_status=True)
     if tipo:
         conf = _montar_conferencia(tipo, df)
-        if not conf.empty:
-            _escrever_aba(wb.create_sheet("Conferencia"), conf, colorir_status=True)
+        ws_conf = wb.create_sheet("Conferencia", 0)
+        _escrever_aba(ws_conf, conf, colorir_status=False)
+        _colorir_conferencia(ws_conf, conf)
+        wb.active = 0
         desat = _montar_desativar(tipo, df)
         if not desat.empty:
             _escrever_aba(wb.create_sheet("Para Desativar"), desat, colorir_status=True)
