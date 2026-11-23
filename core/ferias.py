@@ -78,7 +78,6 @@ def processar_ferias(df: pd.DataFrame, base: BaseColaboradores,
         obs = []
         if c is None:
             obs.append("NÃO ENCONTRADO NA BASE DO SISTEMA")
-            obs.append(base.descrever_pendencia(nome_dom, codi))
         else:
             if info.get("ativo") and info["ativo"] != "Sim":
                 obs.append(f"NÃO ATIVO NO SISTEMA (Ativo: {info['ativo']})")
@@ -131,7 +130,7 @@ def processar_ferias(df: pd.DataFrame, base: BaseColaboradores,
                         f"CANCELADO na Domínio mas continua ATIVO no sistema — "
                         f"confira se precisa cancelar antes de lançar o novo período")
 
-        if status == "NÃO CADASTRADO" and c is not None:
+        if status == "NÃO CADASTRADO":
             imp_rows.append(linha_layout(
                 parceiro_id=info.get("parceiro_id", ""),
                 nomefuncionario=nome_sistema,

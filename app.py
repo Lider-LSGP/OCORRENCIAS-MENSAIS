@@ -63,6 +63,7 @@ st.session_state.setdefault("df_futuras_total", None)
 st.session_state.setdefault("erros", [])
 st.session_state.setdefault("resumo_papeis", None)
 st.session_state.setdefault("processed_at", None)
+st.session_state.setdefault("diag", [])
 
 PROCESSADORES = {
     "FALTAS": processar_faltas,
@@ -96,8 +97,7 @@ with st.sidebar:
     st.divider()
     limiar = st.number_input("Faltas: mínimo de dias p/ mês todo", 1, 31, 20,
                              key=f"limiar_{st.session_state['settings_ctr']}")
-    # A organização da operação é sempre mês > empresa > arquivos.
-    # Não oferecer consolidação como padrão ou reaproveitar opção antiga da sessão.
+    # organização da operação é sempre mês > empresa > arquivos
     dividir = True
     st.caption("📁 Saída: sempre separada por empresa (ATIVA, L COMERCIAL, "
                "L MULTISSERVICOS e VSP).")
@@ -124,6 +124,7 @@ if nova_busca or limpar_tudo:
     st.session_state["erros"] = []
     st.session_state["resumo_papeis"] = None
     st.session_state["processed_at"] = None
+    st.session_state["diag"] = []
     st.session_state["reset_ctr"] += 1
     if limpar_tudo:
         st.session_state["settings_ctr"] += 1
@@ -208,22 +209,34 @@ if processar:
         st.warning("Sem relatório de lançadas — conferência de duplicidade **DESATIVADA**.")
 
     # ---------- 4) Processar relatórios da Domínio ----------
-    resultados, erros = {}, []
+    resultados, erros, diag = {}, [], []
     for nome in papeis["DOMINIO"]:
         df = dfs[nome][1]
         try:
             tipo = detectar_tipo_relatorio(df)
             if not tipo:
                 erros.append(f"**{nome}**: tipo de relatório Domínio não reconhecido.")
+                diag.append({"ARQUIVO": nome, "TIPO": "não reconhecido",
+                             "LINHAS LIDAS": len(df), "LINHAS IMPORTAÇÃO": 0,
+                             "LINHAS RESULTADO": 0, "SITUAÇÃO": "IGNORADO"})
                 continue
             if tipo == "AVISOS":
                 dfs_aviso.append(df)
+                diag.append({"ARQUIVO": nome, "TIPO": "AVISOS", "LINHAS LIDAS": len(df),
+                             "LINHAS IMPORTAÇÃO": 0, "LINHAS RESULTADO": 0,
+                             "SITUAÇÃO": "unido à RELAÇÃO DE RESCISÃO"})
                 continue
             if tipo == "RESCISOES":
                 dfs_rescisao.append(df)
+                diag.append({"ARQUIVO": nome, "TIPO": "RESCISÕES", "LINHAS LIDAS": len(df),
+                             "LINHAS IMPORTAÇÃO": 0, "LINHAS RESULTADO": 0,
+                             "SITUAÇÃO": "unido à RELAÇÃO DE AVISO"})
                 continue
             df_imp, df_res = PROCESSADORES[tipo](df, base, lancadas,
                                                  limiar=limiar, hoje=date.today())
+            diag.append({"ARQUIVO": nome, "TIPO": _nome_bonitinho(tipo),
+                         "LINHAS LIDAS": len(df), "LINHAS IMPORTAÇÃO": len(df_imp),
+                         "LINHAS RESULTADO": len(df_res), "SITUAÇÃO": "OK"})
             if tipo in resultados:  # consolida vários arquivos do mesmo tipo
                 ai, ar = resultados[tipo]
                 resultados[tipo] = (pd.concat([ai, df_imp], ignore_index=True),
@@ -232,8 +245,14 @@ if processar:
                 resultados[tipo] = (df_imp, df_res)
         except NotImplementedError as e:
             erros.append(f"**{nome}**: {e}")
+            diag.append({"ARQUIVO": nome, "TIPO": "-", "LINHAS LIDAS": len(df),
+                         "LINHAS IMPORTAÇÃO": 0, "LINHAS RESULTADO": 0,
+                         "SITUAÇÃO": f"ERRO: {e}"})
         except Exception as e:
             erros.append(f"**{nome}**: erro — {e}")
+            diag.append({"ARQUIVO": nome, "TIPO": "-", "LINHAS LIDAS": len(df),
+                         "LINHAS IMPORTAÇÃO": 0, "LINHAS RESULTADO": 0,
+                         "SITUAÇÃO": f"ERRO: {e}"})
 
     # ---------- 4b) Rescisões/Avisos (junta as duas planilhas, se houver) ----------
     df_futuras_total = None
@@ -246,13 +265,22 @@ if processar:
                 base=base, lancadas=lancadas, hoje=date.today())
             resultados["RESCISOES"] = (df_imp, df_res)
             df_futuras_total = df_futuras
+            diag.append({"ARQUIVO": "AVISO + RESCISÃO (unidos)", "TIPO": "RESCISÕES",
+                         "LINHAS LIDAS": ((len(df_aviso_all) if df_aviso_all is not None else 0) +
+                                          (len(df_rescisao_all) if df_rescisao_all is not None else 0)),
+                         "LINHAS IMPORTAÇÃO": len(df_imp), "LINHAS RESULTADO": len(df_res),
+                         "SITUAÇÃO": "OK"})
         except Exception as e:
             erros.append(f"**Rescisões/Avisos**: erro — {e}")
+            diag.append({"ARQUIVO": "AVISO + RESCISÃO (unidos)", "TIPO": "RESCISÕES",
+                         "LINHAS LIDAS": 0, "LINHAS IMPORTAÇÃO": 0, "LINHAS RESULTADO": 0,
+                         "SITUAÇÃO": f"ERRO: {e}"})
 
     st.session_state["resultados"] = resultados
     st.session_state["df_futuras_total"] = df_futuras_total
     st.session_state["erros"] = erros
     st.session_state["resumo_papeis"] = {k: v for k, v in papeis.items() if k is not None}
+    st.session_state["diag"] = diag
     st.session_state["processed_at"] = datetime.now()
     st.rerun()
 
@@ -294,6 +322,23 @@ with tab_proc:
         for e in erros:
             st.warning(e)
 
+        tipos_recebidos = set(resultados.keys())
+        faltando = [n for t, n in (("FALTAS", "Faltas Mês Todo"), ("FERIAS", "Férias"),
+                                   ("AFASTAMENTOS", "Afastamentos"),
+                                   ("RESCISOES", "Rescisões/Avisos"))
+                    if t not in tipos_recebidos]
+        if faltando:
+            st.info("ℹ️ Sem linhas geradas nesta rodada para: **" + ", ".join(faltando) +
+                    "**. Pode ser que o relatório não tenha sido enviado ou que não haja "
+                    "nada pendente — confira o diagnóstico acima.")
+
+        diag = st.session_state.get("diag") or []
+        if diag:
+            with st.expander("🔍 Diagnóstico por arquivo (linhas lidas → geradas)", expanded=True):
+                st.dataframe(pd.DataFrame(diag), use_container_width=True, hide_index=True)
+                st.caption("Se algum tipo aparece com 0 linhas geradas, o motivo está na "
+                           "coluna SITUAÇÃO — nada é descartado em silêncio.")
+
         for tipo, (df_imp, df_res) in resultados.items():
             st.subheader(f"🗂️ {_nome_bonitinho(tipo)}")
             contagem = df_res["STATUS"].value_counts()
@@ -315,13 +360,7 @@ with tab_proc:
         # DataFrames já calculados) para que os botões de download continuem
         # funcionando após qualquer rerun, sem depender de estado adicional.
         pasta_mes = f"MES {date.today().month:02d}"
-        try:
-            arquivos = montar_arquivos(resultados, dividir, pasta_mes=pasta_mes)
-        except ValueError as e:
-            st.error("Exportação bloqueada para conferência: " + str(e))
-            st.info("Os resultados acima continuam disponíveis. Confira empresa e vínculo "
-                    "dos colaboradores indicados e envie a base corrigida.")
-            st.stop()
+        arquivos = montar_arquivos(resultados, dividir, pasta_mes=pasta_mes)
         if df_futuras_total is not None and not df_futuras_total.empty:
             arquivos[f"{pasta_mes}/ALERTA - DEMISSOES FUTURAS.xlsx"] = resultado_xlsx_bytes(
                 df_futuras_total, titulo_aba="Demissoes Futuras")

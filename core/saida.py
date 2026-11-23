@@ -124,8 +124,14 @@ def _montar_conferencia(tipo: str, df_res: pd.DataFrame) -> pd.DataFrame:
                 "REFERÊNCIA": pegar("REFERÊNCIA"),
                 "PERÍODO": pegar("PERÍODO LANÇADO"),
                 "DIAS": pegar("DIAS DE FALTA")}
+    vazio = pd.Series([""] * len(df_res), index=df_res.index, dtype=object)
     for destino, origem in mapa.items():
-        out[destino] = df_res[origem] if origem else ""
+        # coluna ausente tem de virar uma SÉRIE vazia (antes virava escalar "" e
+        # o pd.DataFrame estourava "If using all scalar values..." — era uma das
+        # formas de o tipo inteiro desaparecer do ZIP)
+        out[destino] = df_res[origem].reset_index(drop=True) if origem else vazio.reset_index(drop=True)
+    if not out:
+        return pd.DataFrame()
     conf = pd.DataFrame(out)
     status = df_res["STATUS"].astype(str)
     obs = df_res["OBS"].astype(str) if "OBS" in df_res.columns else pd.Series([""] * len(df_res))
@@ -172,9 +178,6 @@ def resultado_xlsx_bytes(df: pd.DataFrame, titulo_aba: str = "Resultado",
         desat = _montar_desativar(tipo, df)
         if not desat.empty:
             _escrever_aba(wb.create_sheet("Para Desativar"), desat, colorir_status=True)
-    if "Conferencia" in wb.sheetnames:
-        wb.move_sheet("Conferencia", offset=-wb.sheetnames.index("Conferencia"))
-        wb.active = 0
     bio = io.BytesIO()
     wb.save(bio)
     return bio.getvalue()
@@ -208,93 +211,117 @@ APELIDOS_ARQUIVO = {
 }
 
 
-def _codigo_empresa(valor):
-    """Normaliza códigos numéricos e nomes sem filtros parciais de 'LIDER'."""
-    from .empresas import codi_por_nome
-    v = str(valor).strip() if valor is not None else ""
-    if v.lower() in ("", "nan", "none", "<na>"):
-        return ""
-    if re.fullmatch(r"[1-4](?:\.0+)?", v):
-        return v.split(".")[0]
-    from unicodedata import normalize, combining
-    n = "".join(c for c in normalize("NFD", v.upper()) if not combining(c))
-    n = re.sub(r"\s+", " ", n).strip()
-    aliases = {"L COMERCIAL": "4", "L MULTISSERVICOS": "3",
-               "LIDER MULTISSERVICOS": "3", "LIDER LIMPE": "4",
-               "VSP": "1", "ATIVA": "2"}
-    return aliases.get(n, "") or codi_por_nome(v)
+def _norm_txt(v) -> str:
+    """Normaliza texto de empresa para comparação (maiúsculas, sem \n/acento/espaços)."""
+    import unicodedata
+    s = "" if v is None else str(v).replace("\n", " ").strip().upper()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", s)
 
 
-def _empresas_resultado(df):
-    codigos = []
-    for pos, (_, row) in enumerate(df.iterrows(), 1):
-        codigo = _codigo_empresa(row.get("CODI_EMP", ""))
-        nome = _codigo_empresa(row.get("EMPRESA", ""))
-        if codigo and nome and codigo != nome:
-            raise ValueError(f"Resultado linha {pos}: código e nome da empresa divergem. "
-                             "Exportação bloqueada para não misturar empresas.")
-        codigo = codigo or nome
-        if not codigo:
-            raise ValueError(f"Resultado linha {pos}: empresa não identificada. "
-                             "Corrija a origem antes de exportar.")
-        codigos.append(codigo)
-    return pd.Series(codigos, index=df.index, dtype=str)
+def _norm_cod(v) -> str:
+    """Normaliza o código da empresa (codi_emp) para comparação.
 
-
-def _empresas_importacao(df, df_res, codigos_res):
-    # IDs servem apenas de apoio. Nunca atribuir a mesma linha a duas empresas.
-    por_id = {}
-    if "ID SISTEMA (parceiro_id)" in df_res:
-        for pid, codigo in zip(df_res["ID SISTEMA (parceiro_id)"], codigos_res):
-            pid = str(pid).strip()
-            if pid and pid.lower() not in ("nan", "none"):
-                por_id.setdefault(pid, set()).add(codigo)
-    codigos = []
-    for pos, (_, row) in enumerate(df.iterrows(), 1):
-        codigo = _codigo_empresa(row.get("nomeempresa", ""))
-        apoio = por_id.get(str(row.get("parceiro_id", "")).strip(), set())
-        if codigo and apoio and codigo not in apoio:
-            raise ValueError(f"Importação linha {pos}: empresa diverge do resultado. "
-                             "Exportação bloqueada para conferência.")
-        if not codigo and len(apoio) == 1:
-            codigo = next(iter(apoio))
-        if not codigo:
-            raise ValueError(f"Importação linha {pos}: empresa ausente ou ambígua. "
-                             "Nenhuma linha será duplicada entre pastas.")
-        codigos.append(codigo)
-    return pd.Series(codigos, index=df.index, dtype=str)
+    Na planilha o código pode vir como texto "3", número 3, float 3.0, " 3 "
+    ou "3\n". Antes a comparação era `astype(str) == "3"`, então um 3.0 (ou
+    um valor com espaço) NÃO casava com nenhuma empresa e o tipo inteiro era
+    descartado do ZIP sem aviso — nada de Faltas/Férias/Afastamentos saía.
+    """
+    s = "" if v is None else str(v).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    s = re.sub(r"[^0-9]", "", s)
+    return s
 
 
 def montar_arquivos(resultados: dict, dividir_por_empresa: bool = True,
                     pasta_mes: str = None) -> dict:
-    """Sempre exporta MES XX/EMPRESA. Argumento legado mantido por compatibilidade.
+    """resultados: {tipo: (df_imp, df_res)} -> {caminho_no_zip: bytes}.
 
-    Valida código/nome, identifica cada linha uma única vez e verifica que
-    nenhum registro foi perdido ou replicado na divisão por empresa.
+    Estrutura do ZIP (igual à organização manual da operação):
+        MES 09/
+          ATIVA/ FALTAS ATIVA - IMPORTACAO.csv / - RESULTADO.xlsx ...
+          L COMERCIAL/ ...
+          L MULTISSERVICOS/ ...
+          VSP/ ...
+          A CONFERIR/   <- só se sobrar linha sem empresa identificada
+    NADA é descartado em silêncio: toda linha do resultado sai em algum
+    arquivo (empresa identificada ou "A CONFERIR").
     """
     from datetime import date as _date
     pasta_raiz = pasta_mes or f"MES {_date.today().month:02d}"
     arquivos = {}
+
     for tipo, (df_imp, df_res) in resultados.items():
         nome_tipo = TIPO_NOME_ARQ.get(tipo, tipo)
-        cod_r = _empresas_resultado(df_res)
-        cod_i = _empresas_importacao(df_imp, df_res, cod_r)
-        total_i = total_r = 0
-        for codi in ("2", "4", "3", "1"):
-            apelido = APELIDOS_ARQUIVO[codi]
-            sub_i = df_imp.loc[cod_i == codi].copy()
-            sub_r = df_res.loc[cod_r == codi].copy()
+        df_imp = (df_imp if df_imp is not None else pd.DataFrame()).reset_index(drop=True)
+        df_res = (df_res if df_res is not None else pd.DataFrame()).reset_index(drop=True)
+
+        if not dividir_por_empresa:
+            pasta = f"{pasta_raiz}/TODAS EMPRESAS"
+            arquivos[f"{pasta}/{nome_tipo} - IMPORTACAO.csv"] = importacao_csv_bytes(df_imp)
+            arquivos[f"{pasta}/{nome_tipo} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
+                df_res, titulo_aba=nome_tipo, tipo=tipo)
+            continue
+
+        tem_cod = "CODI_EMP" in df_res.columns
+        tem_pid = "ID SISTEMA (parceiro_id)" in df_res.columns
+        idx_usados, ids_usados = set(), set()
+
+        for codi, nome_emp in EMPRESAS.items():
+            apelido = APELIDOS_ARQUIVO.get(codi, APELIDOS.get(codi, codi))
+            sub_r = df_res[df_res["CODI_EMP"].map(_norm_cod) == codi] if tem_cod \
+                else df_res.iloc[0:0]
+
+            if not df_imp.empty and "parceiro_id" in df_imp.columns and not sub_r.empty and tem_pid:
+                ids_emp = {str(x) for x in sub_r["ID SISTEMA (parceiro_id)"].astype(str)} - {"", "nan"}
+                sub_i = df_imp[df_imp["parceiro_id"].astype(str).isin(ids_emp)]
+            elif not df_imp.empty and "nomeempresa" in df_imp.columns:
+                # comparação tolerante: a base pode trazer o nome com "\n",
+                # espaços extras ou grafia levemente diferente
+                _nomes = df_imp["nomeempresa"].map(_norm_txt)
+                alvo = _norm_txt(nome_emp)
+                _m = _nomes == alvo
+                # tolera truncamento ("...PATRIMONIAL L") e sufixos ("LTDA")
+                curto = alvo[:24]
+                _m = _m | _nomes.map(lambda x: bool(x) and (x.startswith(curto) or curto.startswith(x[:24])))
+                sub_i = df_imp[_m]
+            else:
+                sub_i = df_imp.iloc[0:0]
+
             if sub_i.empty and sub_r.empty:
                 continue
-            total_i += len(sub_i)
-            total_r += len(sub_r)
+
+            idx_usados.update(sub_r.index.tolist())
+            ids_usados.update(str(x) for x in sub_i["parceiro_id"].astype(str)) if "parceiro_id" in sub_i.columns else None
+
             pasta = f"{pasta_raiz}/{apelido}"
             arquivos[f"{pasta}/{nome_tipo} {apelido} - IMPORTACAO.csv"] = importacao_csv_bytes(sub_i)
             arquivos[f"{pasta}/{nome_tipo} {apelido} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
-                sub_r, titulo_aba=f"{nome_tipo} {apelido}"[:31], tipo=tipo)
-        if total_i != len(df_imp) or total_r != len(df_res):
-            raise ValueError("Falha de integridade na separação por empresa.")
+                sub_r, titulo_aba=f"{nome_tipo[:20]} {apelido}"[:31], tipo=tipo)
+
+        # ---- TRAVA ANTI-PERDA: o que não casou com empresa nenhuma ----
+        sobra_r = df_res[~df_res.index.isin(idx_usados)] if len(df_res) else df_res.iloc[0:0]
+        if not df_imp.empty and "parceiro_id" in df_imp.columns:
+            sobra_i = df_imp[~df_imp["parceiro_id"].astype(str).isin(ids_usados)]
+        else:
+            sobra_i = df_imp if not idx_usados else df_imp.iloc[0:0]
+        if len(sobra_r) or len(sobra_i):
+            pasta = f"{pasta_raiz}/A CONFERIR"
+            arquivos[f"{pasta}/{nome_tipo} - IMPORTACAO.csv"] = importacao_csv_bytes(sobra_i)
+            arquivos[f"{pasta}/{nome_tipo} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
+                sobra_r, titulo_aba=nome_tipo, tipo=tipo)
+
     return arquivos
+
+
+def _chave_emp(nome_emp: str) -> str:
+    # palavra distintiva para casar empresa na coluna nomeempresa
+    for chave in ("ATIVA", "MULTISSERVICOS", "LIMPE", "VSP"):
+        if chave in nome_emp.upper():
+            return "LIDER" if chave in ("MULTISSERVICOS", "LIMPE") else chave
+    return nome_emp.split()[0]
 
 
 def zip_bytes(arquivos: dict) -> bytes:

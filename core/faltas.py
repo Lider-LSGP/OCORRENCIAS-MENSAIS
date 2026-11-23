@@ -122,7 +122,6 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
         obs, matched_por = [], ""
         if c is None:
             obs.append("NÃO ENCONTRADO NA BASE DO SISTEMA")
-            obs.append(base.descrever_pendencia(nome_dom, codi))
             matched_por = "—"
         else:
             mat_ok = matricula and re.sub(r"\D", "", matricula) == re.sub(r"\D", "", info.get("matricula", ""))
@@ -141,7 +140,7 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
 
         # ---- conferência de já lançados ----
         status = "VÁLIDO"
-        if lancadas is not None and info:
+        if lancadas is not None:
             if lancadas.ja_lancado(ini, info.get("parceiro_id", ""), nome_sistema):
                 tipos = lancadas.tipos_do_colaborador(ini, info.get("parceiro_id", ""), nome_sistema)
                 obs.append(f"Já existe ocorrência tipo(s) {_nomes_tipos(tipos)} com início em {ini.strftime('%d/%m/%Y')}")
@@ -151,7 +150,7 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
             status = "EM ABERTO"
 
         # ---- linha de importação (só o que não está lançado) ----
-        if status != "JÁ LANÇADO" and c is not None:
+        if status != "JÁ LANÇADO":
             imp_rows.append(linha_layout(
                 parceiro_id=info.get("parceiro_id", ""),
                 nomefuncionario=nome_sistema,
