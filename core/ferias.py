@@ -29,7 +29,7 @@ import pandas as pd
 
 from .colaboradores import BaseColaboradores, norm_nome
 from .common import clean, to_date, lancamento_residual_proximo
-from .empresas import nome_empresa
+from .empresas import nome_empresa, codigo_empresa
 from .layout import linha_layout, COLUNAS_LAYOUT, BASE_DEFAULTS, NOMES_TIPO
 
 TOLERANCIA_PROXIMIDADE_DIAS = 40  # p/ considerar um lançamento "do mesmo período"
@@ -70,7 +70,7 @@ def processar_ferias(df: pd.DataFrame, base: BaseColaboradores,
         fim_esp = to_date(r.get("fim_gozo"))
         if not nome_dom or ini_esp is None or fim_esp is None:
             continue
-        codi = clean(r.get("codi_emp"))
+        codi = codigo_empresa(r.get("codi_emp")) or clean(r.get("codi_emp"))
         matricula = clean(r.get("i_empregados"))
 
         c = base.buscar(nome=nome_dom, matricula=matricula, codi_emp=codi)
@@ -92,7 +92,7 @@ def processar_ferias(df: pd.DataFrame, base: BaseColaboradores,
         # ---- conferência contra o que já está lançado ----
         status = "NÃO CADASTRADO"
         if lancadas is not None and info:
-            recs = lancadas.periodos_colaborador(info.get("parceiro_id", ""), nome_sistema,
+            recs = lancadas.periodos_colaborador(info.get("parceiro_id", ""), "",
                                                  tipos=("31", "32", "34"))
             melhor, melhor_dist = None, None
             for rec in recs:
@@ -130,7 +130,7 @@ def processar_ferias(df: pd.DataFrame, base: BaseColaboradores,
                         f"CANCELADO na Domínio mas continua ATIVO no sistema — "
                         f"confira se precisa cancelar antes de lançar o novo período")
 
-        if status == "NÃO CADASTRADO":
+        if status == "NÃO CADASTRADO" and info.get("parceiro_id"):
             imp_rows.append(linha_layout(
                 parceiro_id=info.get("parceiro_id", ""),
                 nomefuncionario=nome_sistema,
@@ -140,6 +140,9 @@ def processar_ferias(df: pd.DataFrame, base: BaseColaboradores,
                 datainicio=ini_esp, datafim=fim_esp, hoje=hoje,
                 fixos=_fixos_ferias(tipo_id, nome_oc),
             ))
+
+        if not info and status == "NÃO CADASTRADO":
+            status = "CONFERÊNCIA MANUAL"
 
         res_rows.append({
             "STATUS": status,

@@ -89,3 +89,9 @@ def codi_por_nome(nome: str) -> str:
         if n.startswith(alias):
             return c
     return ""
+
+
+def codigo_empresa(valor):
+    """Normaliza códigos inteiros sem transformar códigos inválidos em válidos."""
+    m = re.fullmatch(r"0*([1-9][0-9]*)(?:\.0+)?", str(valor).strip())
+    return m[1] if m and m[1] in EMPRESAS else ""

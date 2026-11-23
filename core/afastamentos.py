@@ -45,7 +45,7 @@ import pandas as pd
 
 from .colaboradores import BaseColaboradores
 from .common import clean, to_date, merge_intervalos, melhor_faixa
-from .empresas import nome_empresa
+from .empresas import nome_empresa, codigo_empresa
 from .layout import linha_layout, COLUNAS_LAYOUT, BASE_DEFAULTS, NOMES_TIPO
 
 DIAS_MIN_AFASTAMENTO = 16  # "superior a 15 dias"
@@ -97,7 +97,8 @@ def processar_afastamentos(df: pd.DataFrame, base: BaseColaboradores,
         if fim < ini:
             ini, fim = fim, ini
         nome_dom = clean(r.get("nome"))
-        codi = clean(r.get("codi_emp") or r.get("codi_emp.1"))
+        codi = (codigo_empresa(r.get("codi_emp")) or codigo_empresa(r.get("codi_emp.1"))
+                or clean(r.get("codi_emp")) or clean(r.get("codi_emp.1")))
         chave = (nome_dom.upper(), codi)
 
         tipo_id = _classificar_motivo(desc)
@@ -156,7 +157,7 @@ def processar_afastamentos(df: pd.DataFrame, base: BaseColaboradores,
         # ---- conferência: junta também os lançamentos já existentes no sistema ----
         status = "NÃO CADASTRADO"
         if lancadas is not None and info:
-            recs = lancadas.periodos_colaborador(info.get("parceiro_id", ""), nome_sistema,
+            recs = lancadas.periodos_colaborador(info.get("parceiro_id", ""), "",
                                                  tipos=("18", "35", "41"))
             trechos_sistema = [(rc["ini"], rc["fim"]) for rc in recs]
             merged_sist = merge_intervalos(trechos_sistema, gap_dias=1)
@@ -176,7 +177,7 @@ def processar_afastamentos(df: pd.DataFrame, base: BaseColaboradores,
                     obs.append(f"TIPO LANÇADO DIVERGENTE: sistema tem '{nomes_lanc}' "
                                f"(esperado '{nome_oc}')")
 
-        if status == "NÃO CADASTRADO":
+        if status == "NÃO CADASTRADO" and info.get("parceiro_id"):
             imp_rows.append(linha_layout(
                 parceiro_id=info.get("parceiro_id", ""),
                 nomefuncionario=nome_sistema,
@@ -186,6 +187,9 @@ def processar_afastamentos(df: pd.DataFrame, base: BaseColaboradores,
                 datainicio=ini_esp, datafim=fim_esp, hoje=hoje,
                 fixos={**FIXOS_AFASTAMENTO, "tipoocorrencia_id": tipo_id, "nomeocorrencia": nome_oc},
             ))
+
+        if not info and status == "NÃO CADASTRADO":
+            status = "CONFERÊNCIA MANUAL"
 
         res_rows.append({
             "STATUS": status,

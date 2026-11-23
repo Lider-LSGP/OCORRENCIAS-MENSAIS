@@ -73,7 +73,7 @@ import pandas as pd
 
 from .colaboradores import BaseColaboradores, norm_nome
 from .common import clean, to_date, lancamento_residual_proximo
-from .empresas import nome_empresa
+from .empresas import nome_empresa, codigo_empresa
 from .layout import linha_layout, COLUNAS_LAYOUT, BASE_DEFAULTS, NOMES_TIPO
 
 DESCONTO_AVISO_CUMPRIDO_EMPRESA = 7
@@ -149,7 +149,7 @@ def _unir_aviso_rescisao(df_aviso: Optional[pd.DataFrame], df_rescisao: Optional
     if df_rescisao is not None:
         for _, r in df_rescisao.iterrows():
             nome = clean(r.get("nome"))
-            codi = clean(r.get("codi_emp"))
+            codi = codigo_empresa(r.get("codi_emp")) or clean(r.get("codi_emp"))
             chave = (norm_nome(nome), codi)
             registros[chave] = {
                 "nome": nome, "codi": codi,
@@ -165,7 +165,7 @@ def _unir_aviso_rescisao(df_aviso: Optional[pd.DataFrame], df_rescisao: Optional
     if df_aviso is not None:
         for _, r in df_aviso.iterrows():
             nome = clean(r.get("nome"))
-            codi = clean(r.get("codi_emp"))
+            codi = codigo_empresa(r.get("codi_emp")) or clean(r.get("codi_emp"))
             chave = (norm_nome(nome), codi)
             concessor_raw = clean(r.get("concessor"))
             existente = registros.get(chave)
@@ -279,7 +279,7 @@ def processar_rescisoes_avisos(df_aviso: Optional[pd.DataFrame] = None,
         # ---- conferência contra o que já está lançado ----
         status = "NÃO CADASTRADO"
         if lancadas is not None and info:
-            recs = lancadas.periodos_colaborador(info.get("parceiro_id", ""), nome_sistema,
+            recs = lancadas.periodos_colaborador(info.get("parceiro_id", ""), "",
                                                  tipos=("33", "36", "38", "39", "40"))
             # CORREÇÃO: só considera "já cadastrado" se houver um lançamento do
             # MESMO tipo com a MESMA data de início. Se houver do mesmo tipo mas

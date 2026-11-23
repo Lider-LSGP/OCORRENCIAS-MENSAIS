@@ -382,7 +382,7 @@ with tab_proc:
         st.markdown("""
 **Como funciona (visão geral):**
 1. Lê os relatórios da Domínio e casa cada colaborador com a base do sistema
-   (matrícula eSocial → nome+empresa → nome).
+   (nome e empresa; matrícula para diferenciar os vínculos).
 2. Confere contra o que já está lançado no sistema (EasyApp).
 3. Gera **CSV de importação** (pronto para o EasyApp) + **XLSX de resultado** com
    STATUS colorido e OBS (não encontrado, nome divergente, demitido/não ativo,

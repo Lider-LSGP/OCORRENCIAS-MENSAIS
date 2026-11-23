@@ -15,7 +15,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils.dataframe import dataframe_to_rows
 
-from .empresas import EMPRESAS, APELIDOS, apelido_empresa
+from .empresas import EMPRESAS, APELIDOS, apelido_empresa, codi_por_nome, codigo_empresa
 
 _LILAS = PatternFill("solid", start_color="FFE8DAEF")   # p/ desativar (ação pendente)
 
@@ -144,7 +144,7 @@ def _montar_conferencia(tipo: str, df_res: pd.DataFrame) -> pd.DataFrame:
             else:
                 cadastro = "NÃO CADASTRADO"
                 validacao = obs or "OUTRA OCORRÊNCIA NA MESMA DATA — CONFERIR"
-        elif principal.startswith("NÃO CADASTRADO") or principal in ("VÁLIDO", "EM ABERTO"):
+        elif principal.startswith("NÃO CADASTRADO") or principal in ("VÁLIDO", "EM ABERTO", "NÃO LANÇAR"):
             cadastro = "NÃO CADASTRADO"
         elif principal == "CONFERÊNCIA MANUAL":
             cadastro = "CONFERÊNCIA MANUAL"
@@ -178,6 +178,8 @@ def _colorir_conferencia(ws, conf):
         indice = conf.columns.get_loc(coluna) + 1
         for i, valor in enumerate(conf[coluna], start=2):
             fill = cores.get(valor)
+            if coluna == "VALIDAÇÃO" and "NÃO LANÇAR FALTA 30 DIAS" in valor:
+                fill = _VERMELHO
             if coluna == "CADASTRO" and valor.startswith("CADASTRADO (ERRO DATA"):
                 fill = _VERMELHO
             cel = ws.cell(row=i, column=indice)
@@ -254,30 +256,6 @@ APELIDOS_ARQUIVO = {
 }
 
 
-def _norm_txt(v) -> str:
-    """Normaliza texto de empresa para comparação (maiúsculas, sem \n/acento/espaços)."""
-    import unicodedata
-    s = "" if v is None else str(v).replace("\n", " ").strip().upper()
-    s = unicodedata.normalize("NFD", s)
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    return re.sub(r"\s+", " ", s)
-
-
-def _norm_cod(v) -> str:
-    """Normaliza o código da empresa (codi_emp) para comparação.
-
-    Na planilha o código pode vir como texto "3", número 3, float 3.0, " 3 "
-    ou "3\n". Antes a comparação era `astype(str) == "3"`, então um 3.0 (ou
-    um valor com espaço) NÃO casava com nenhuma empresa e o tipo inteiro era
-    descartado do ZIP sem aviso — nada de Faltas/Férias/Afastamentos saía.
-    """
-    s = "" if v is None else str(v).strip()
-    if s.endswith(".0"):
-        s = s[:-2]
-    s = re.sub(r"[^0-9]", "", s)
-    return s
-
-
 def montar_arquivos(resultados: dict, dividir_por_empresa: bool = True,
                     pasta_mes: str = None) -> dict:
     """resultados: {tipo: (df_imp, df_res)} -> {caminho_no_zip: bytes}.
@@ -308,53 +286,36 @@ def montar_arquivos(resultados: dict, dividir_por_empresa: bool = True,
                 df_res, titulo_aba=nome_tipo, tipo=tipo)
             continue
 
-        tem_cod = "CODI_EMP" in df_res.columns
-        tem_pid = "ID SISTEMA (parceiro_id)" in df_res.columns
-        idx_usados, ids_usados = set(), set()
-
-        for codi, nome_emp in EMPRESAS.items():
-            apelido = APELIDOS_ARQUIVO.get(codi, APELIDOS.get(codi, codi))
-            sub_r = df_res[df_res["CODI_EMP"].map(_norm_cod) == codi] if tem_cod \
-                else df_res.iloc[0:0]
-
-            if not df_imp.empty and "parceiro_id" in df_imp.columns and not sub_r.empty and tem_pid:
-                ids_emp = {str(x) for x in sub_r["ID SISTEMA (parceiro_id)"].astype(str)} - {"", "nan"}
-                sub_i = df_imp[df_imp["parceiro_id"].astype(str).isin(ids_emp)]
-            elif not df_imp.empty and "nomeempresa" in df_imp.columns:
-                # comparação tolerante: a base pode trazer o nome com "\n",
-                # espaços extras ou grafia levemente diferente
-                _nomes = df_imp["nomeempresa"].map(_norm_txt)
-                alvo = _norm_txt(nome_emp)
-                _m = _nomes == alvo
-                # tolera truncamento ("...PATRIMONIAL L") e sufixos ("LTDA")
-                curto = alvo[:24]
-                _m = _m | _nomes.map(lambda x: bool(x) and (x.startswith(curto) or curto.startswith(x[:24])))
-                sub_i = df_imp[_m]
-            else:
-                sub_i = df_imp.iloc[0:0]
-
-            if sub_i.empty and sub_r.empty:
+        codigos = df_res.get("CODI_EMP", pd.Series("", index=df_res.index)).map(codigo_empresa)
+        pids = df_res.get("ID SISTEMA (parceiro_id)", pd.Series("", index=df_res.index)).fillna("").astype(str).str.strip()
+        empresas_por_id = {}
+        for pid, cod in zip(pids, codigos):
+            if pid:
+                empresas_por_id.setdefault(pid, set()).add(cod)
+        encaminhar = []
+        for _, linha in df_imp.iterrows():
+            cod = codi_por_nome(linha.get("nomeempresa", ""))
+            pid = str(linha.get("parceiro_id", "")).strip()
+            encaminhar.append(cod if cod and empresas_por_id.get(pid) == {cod} else "")
+        destino = pd.Series(encaminhar, index=df_imp.index, dtype=str)
+        for codi in EMPRESAS:
+            sub_r = df_res[codigos == codi]
+            sub_i = df_imp[destino == codi]
+            if sub_r.empty:
                 continue
-
-            idx_usados.update(sub_r.index.tolist())
-            ids_usados.update(str(x) for x in sub_i["parceiro_id"].astype(str)) if "parceiro_id" in sub_i.columns else None
-
+            apelido = APELIDOS_ARQUIVO[codi]
             pasta = f"{pasta_raiz}/{apelido}"
             arquivos[f"{pasta}/{nome_tipo} {apelido} - IMPORTACAO.csv"] = importacao_csv_bytes(sub_i)
             arquivos[f"{pasta}/{nome_tipo} {apelido} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
                 sub_r, titulo_aba=f"{nome_tipo[:20]} {apelido}"[:31], tipo=tipo)
-
-        # ---- TRAVA ANTI-PERDA: o que não casou com empresa nenhuma ----
-        sobra_r = df_res[~df_res.index.isin(idx_usados)] if len(df_res) else df_res.iloc[0:0]
-        if not df_imp.empty and "parceiro_id" in df_imp.columns:
-            sobra_i = df_imp[~df_imp["parceiro_id"].astype(str).isin(ids_usados)]
-        else:
-            sobra_i = df_imp if not idx_usados else df_imp.iloc[0:0]
-        if len(sobra_r) or len(sobra_i):
-            pasta = f"{pasta_raiz}/A CONFERIR"
-            arquivos[f"{pasta}/{nome_tipo} - IMPORTACAO.csv"] = importacao_csv_bytes(sobra_i)
+        pasta = f"{pasta_raiz}/A CONFERIR"
+        if (codigos == "").any():
             arquivos[f"{pasta}/{nome_tipo} - RESULTADO.xlsx"] = resultado_xlsx_bytes(
-                sobra_r, titulo_aba=nome_tipo, tipo=tipo)
+                df_res[codigos == ""], titulo_aba=nome_tipo, tipo=tipo)
+        if (destino == "").any():
+            rejeitadas = df_imp[destino == ""].loc[:, [c for c in ("nomefuncionario", "parceiro_id", "nomeempresa") if c in df_imp]]
+            arquivos[f"{pasta}/{nome_tipo} - VINCULOS BLOQUEADOS.xlsx"] = resultado_xlsx_bytes(
+                rejeitadas, titulo_aba="Vínculos bloqueados")
 
     return arquivos
 

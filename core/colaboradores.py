@@ -1,9 +1,6 @@
 """Base de colaboradores do sistema interno (EasyApp).
 
-Casamento em cascata:
-  1) matrícula (i_empregados / matricula_esocial da Domínio  ==  Matricula)
-  2) nome normalizado + empresa
-  3) nome normalizado (global)
+Busca por nome e empresa; a matrícula desempata vínculos na mesma empresa.
 """
 from __future__ import annotations
 
@@ -12,7 +9,7 @@ import unicodedata
 import pandas as pd
 from typing import Optional
 
-from .empresas import codi_por_nome
+from .empresas import codi_por_nome, codigo_empresa
 
 
 def clean(s) -> str:
@@ -26,6 +23,25 @@ def norm_nome(s) -> str:
     s = "".join(c for c in unicodedata.normalize("NFD", s)
                 if unicodedata.category(c) != "Mn")
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _cpf(valor):
+    n = re.sub(r"\D", "", re.sub(r"\.0+$", "", clean(valor)))
+    if not 9 <= len(n) <= 11:
+        return ""
+    n = n.zfill(11)
+    if len(set(n)) == 1:
+        return ""
+    for i in (9, 10):
+        resto = (sum(int(d) * (i+1-j) for j, d in enumerate(n[:i])) * 10) % 11
+        if int(n[i]) != (0 if resto == 10 else resto):
+            return ""
+    return n
+
+
+def _tipo_pcd(valor):
+    v = clean(valor)
+    return v if norm_nome(v) not in {"", "NAO", "N", "0", "0.0", "-", "NAN", "N/A", "NAO SE APLICA", "NAO PCD", "SEM DEFICIENCIA"} else ""
 
 
 class BaseColaboradores:
@@ -43,34 +59,32 @@ class BaseColaboradores:
         df["_empresa"] = df["Empresa:"].apply(clean)
         df["_codi"] = df["_empresa"].apply(codi_por_nome)
         self.df = df
-        self._by_mat = {}
-        self._by_nome_emp = {}
-        self._by_nome = {}
+        self._por_empresa_nome = {}
+        self._pcd_por_cpf = {}
         for _, r in df.iterrows():
-            if r["_mat"]:
-                self._by_mat.setdefault((r["_codi"], r["_mat"]), r)
-                self._by_mat.setdefault(("", r["_mat"]), r)  # matrícula sem empresa
-            if r["_nome"]:
-                self._by_nome_emp.setdefault((r["_codi"], r["_nome"]), r)
-                self._by_nome.setdefault(r["_nome"], r)
+            if r["_codi"] and r["_nome"]:
+                self._por_empresa_nome.setdefault((r["_codi"], r["_nome"]), []).append(r)
+            cpf = _cpf(r.get("CPF:"))
+            tipo = _tipo_pcd(r.get("Tipo/PCD:"))
+            if cpf and tipo:
+                self._pcd_por_cpf.setdefault(cpf, tipo)
 
     def buscar(self, nome=None, matricula=None, codi_emp=None) -> Optional[pd.Series]:
-        mat = re.sub(r"\D", "", clean(matricula)) if matricula else ""
-        nn = norm_nome(nome) if nome else ""
-        ce = str(codi_emp).strip() if codi_emp else ""
+        ce, nn = codigo_empresa(codi_emp), norm_nome(nome)
+        if not ce or not nn:
+            return None
+        candidatos = self._por_empresa_nome.get((ce, nn), [])
+        mat = re.sub(r"\D", "", clean(matricula))
         if mat:
-            r = self._by_mat.get((ce, mat))
-            if r is not None:
-                return r
-        if nn and ce:
-            r = self._by_nome_emp.get((ce, nn))
-            if r is not None:
-                return r
-        if nn:
-            return self._by_nome.get(nn)
-        if mat:
-            return self._by_mat.get(("", mat))
-        return None
+            exatos = [r for r in candidatos if r["_mat"] == mat]
+            if exatos:
+                candidatos = exatos
+        return candidatos[0] if len(candidatos) == 1 and clean(candidatos[0].get("Id:")) else None
+
+    def tipo_pcd(self, r):
+        if r is None:
+            return ""
+        return _tipo_pcd(r.get("Tipo/PCD:")) or self._pcd_por_cpf.get(_cpf(r.get("CPF:")), "")
 
     @staticmethod
     def info(r):

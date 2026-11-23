@@ -7,8 +7,7 @@ Regras (confirmadas com o operação):
     último dia (28/29/30/31 — bissexto tratado por calendar.monthrange),
     qtddiasafastamento = nº de dias do mês, retorno = datafim + 1.
   * tipoocorrencia_id = 13 (FALTA 30 DIAS) e demais fixos do layout.
-  * Casamento com a base: matrícula (matricula_esocial / i_empregados) ->
-    nome+empresa -> nome. OBS marca divergências, inativos, PCD etc.
+  * Busca limitada à empresa do relatório. PCD e exceções ficam fora do CSV.
   * Conferência: se já existe QUALQUER ocorrência no sistema com a mesma
     data inicial para o colaborador -> JÁ LANÇADO (não sai na importação).
 """
@@ -21,10 +20,18 @@ from typing import Optional, Tuple
 import pandas as pd
 
 from .colaboradores import BaseColaboradores, norm_nome, clean
-from .empresas import nome_empresa, EMPRESAS
+from .empresas import nome_empresa, EMPRESAS, codigo_empresa
 from .layout import linha_layout, COLUNAS_LAYOUT, mes_seguinte, periodo_mes, NOMES_TIPO
 
 LIMIAR_DIAS_PADRAO = 20
+EXCECOES_FALTA_30_DIAS = {"MARIA GABRYELA FERREIRA ROCHA", "OSEIAS MOREIRA DO COUTO"}
+
+
+def motivo_bloqueio_falta(base, colaborador, nome):
+    if norm_nome(nome) in EXCECOES_FALTA_30_DIAS:
+        return "EXCEÇÃO — NÃO LANÇAR FALTA 30 DIAS"
+    pcd = base.tipo_pcd(colaborador)
+    return f"PCD ({pcd}) — NÃO LANÇAR FALTA 30 DIAS" if pcd else ""
 
 
 def detectar_tipo_relatorio(df: pd.DataFrame) -> Optional[str]:
@@ -108,7 +115,7 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
         nome_dom = clean(r.get(col_nome))
         if not nome_dom or ref is None:
             continue
-        codi = clean(r.get("codi_emp"))
+        codi = codigo_empresa(r.get("codi_emp")) or clean(r.get("codi_emp"))
         matricula = clean(r.get("matricula_esocial")) or clean(r.get("i_empregados"))
 
         mes_l, ano_l = mes_seguinte(*ref)
@@ -132,8 +139,9 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
                 obs.append(f"NÃO ATIVO NO SISTEMA (Ativo: {info['ativo']})")
             if info.get("demissao"):
                 obs.append(f"DEMISSÃO no sistema: {info['demissao']}")
-            if info.get("pcd"):
-                obs.append(f"PCD ({info['pcd']})")
+        motivo_bloqueio = motivo_bloqueio_falta(base, c, nome_dom)
+        if motivo_bloqueio:
+            obs.append(motivo_bloqueio)
 
         nome_sistema = info.get("nome") or nome_dom
         empresa = info.get("empresa") or nome_empresa(codi)
@@ -141,17 +149,21 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
         # ---- conferência de já lançados ----
         status = "VÁLIDO"
         tipos = []
-        if lancadas is not None:
-            if lancadas.ja_lancado(ini, info.get("parceiro_id", ""), nome_sistema):
-                tipos = lancadas.tipos_do_colaborador(ini, info.get("parceiro_id", ""), nome_sistema)
+        if lancadas is not None and info.get("parceiro_id"):
+            tipos = lancadas.tipos_na_data(ini, info["parceiro_id"])
+            if tipos:
                 obs.append(f"Já existe ocorrência tipo(s) {_nomes_tipos(tipos)} com início em {ini.strftime('%d/%m/%Y')}")
                 status = "JÁ LANÇADO"
+        if motivo_bloqueio and "13" in tipos:
+            obs.append("FALTA 30 DIAS JÁ LANÇADA — CONFERIR NO SISTEMA")
         bloqueios = [o for o in obs if o.startswith(("NÃO ENCONTRADO", "NOME DIVERGENTE", "NÃO ATIVO"))]
         if status != "JÁ LANÇADO" and bloqueios:
             status = "EM ABERTO"
 
         # ---- linha de importação (só o que não está lançado) ----
-        if status != "JÁ LANÇADO":
+        if motivo_bloqueio and status != "JÁ LANÇADO":
+            status = "NÃO LANÇAR"
+        if status == "VÁLIDO" and info.get("parceiro_id"):
             imp_rows.append(linha_layout(
                 parceiro_id=info.get("parceiro_id", ""),
                 nomefuncionario=nome_sistema,
@@ -173,6 +185,7 @@ def processar_faltas(df: pd.DataFrame, base: BaseColaboradores,
             "REFERÊNCIA": ref_txt,
             "PERÍODO LANÇADO": periodo_txt,
             "CASADO POR": matched_por,
+            "BLOQUEIO FALTA 30 DIAS": motivo_bloqueio,
             "TIPOS NA DATA": ",".join(str(t) for t in tipos),
             "OBS": " | ".join(obs),
         })
